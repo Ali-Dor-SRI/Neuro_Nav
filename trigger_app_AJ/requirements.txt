@@ -1,0 +1,5 @@
+# Windows client only — Mac server uses stdlib only.
+pyautogui>=0.9.54
+
+# Build tooling (only needed when producing installers)
+pyinstaller>=6.0

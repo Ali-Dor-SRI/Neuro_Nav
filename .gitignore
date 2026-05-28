@@ -1,0 +1,56 @@
+# ─── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+build_intermediate/
+dist/
+dist_bridge/
+*.spec
+# ...but trigger_app_AJ/build/ holds the actual build SCRIPTS, not artifacts:
+!trigger_app_AJ/build/
+!trigger_app_AJ/build/**
+.venv/
+venv/
+env/
+.env
+
+# ─── R / RStudio ───────────────────────────────────────────────────────────
+.Rproj.user/
+.Rhistory
+.RData
+.RDataTmp
+.Ruserdata
+
+# ─── OS / editor cruft ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# ─── Secrets (NEVER commit) ────────────────────────────────────────────────
+# Shared-secret tokens for the trigger system. Each install generates its own.
+tms_token.txt
+windows_token.txt
+*.token
+config.json
+
+# ─── Subject / session data ────────────────────────────────────────────────
+# Brainsight session exports can contain subject identifiers and are large.
+# Keep them in the lab's secure data store, not in git.
+data/
+*.RData
+
+# Keep small sample files for testing if needed:
+!data/.gitkeep
+
+# ─── Build artifacts ───────────────────────────────────────────────────────
+*.log
+*.tmp
