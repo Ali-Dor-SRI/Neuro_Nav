@@ -40,13 +40,23 @@ fi
 echo "==> Ensuring PyInstaller + Pillow are installed"
 "$PY" -m pip install --quiet --upgrade pyinstaller pillow
 
-# ── Generate the icon ─────────────────────────────────────────────────────────
-echo "==> Generating app icon"
-ICON_PNG="$SCRIPT_DIR/icon.png"
+# ── Choose the icon source ────────────────────────────────────────────────────
+# Prefer a custom PNG committed to the repo (icon_chat_gpt.png). Fall back
+# to the Pillow-generated "Bs" monogram if the committed icon is absent.
+# Both candidates should be 1024x1024 RGBA for best results.
+ICON_PNG_USER="$SCRIPT_DIR/icon_chat_gpt.png"
+ICON_PNG_FALLBACK="$SCRIPT_DIR/icon.png"
 ICON_ICNS="$SCRIPT_DIR/icon.icns"
 ICON_SET="$SCRIPT_DIR/icon.iconset"
 
-"$PY" "$SCRIPT_DIR/generate_icon.py" "$ICON_PNG"
+if [ -f "$ICON_PNG_USER" ]; then
+    ICON_PNG="$ICON_PNG_USER"
+    echo "==> Using committed icon: $(basename "$ICON_PNG")"
+else
+    echo "==> $(basename "$ICON_PNG_USER") not found; generating fallback monogram"
+    "$PY" "$SCRIPT_DIR/generate_icon.py" "$ICON_PNG_FALLBACK"
+    ICON_PNG="$ICON_PNG_FALLBACK"
+fi
 
 # Convert PNG -> ICNS via macOS native iconutil. Requires sips + iconutil
 # which ship with macOS.
