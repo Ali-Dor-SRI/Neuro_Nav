@@ -11,9 +11,17 @@ build_intermediate/
 dist/
 dist_bridge/
 *.spec
-# ...but trigger_app_AJ/build/ holds the actual build SCRIPTS, not artifacts:
+# ...but these build/ subdirs hold the actual build SCRIPTS, not artifacts:
 !trigger_app_AJ/build/
 !trigger_app_AJ/build/**
+!python/brainsight_gui/build/
+!python/brainsight_gui/build/**
+
+# ─── Build outputs (icons, DMGs) ──────────────────────────────────────────
+*.icns
+*.iconset/
+icon.png
+*.dmg
 .venv/
 venv/
 env/

@@ -7,6 +7,44 @@ project-wide release tag (`vX.Y.Z`).
 
 ---
 
+## `dist-v0.1.0` — 2026-05-29
+
+### Added — distributable bundles for both platforms
+
+**Mac (`Brainsight Monitor.app` + `.dmg`):**
+- `python/brainsight_gui/build/build_mac.sh` — runs on macOS, produces
+  `dist/Brainsight Monitor.app` (windowed, no terminal) and
+  `dist/Brainsight Monitor.dmg` (drag-to-Applications installer). Uses
+  PyInstaller with `--windowed`, `--osx-bundle-identifier
+  com.lab.brainsight.monitor`.
+- `python/brainsight_gui/build/generate_icon.py` — Pillow-based icon
+  generator. Deep-blue rounded-square gradient + "Bs" monogram at
+  1024×1024. Converted to `.icns` by the build script via macOS-native
+  `sips` + `iconutil`. Gracefully falls back to the default icon if
+  those tools aren't available.
+
+**Windows (`TMS Trigger Receiver.exe`):**
+- Existing `trigger_app_AJ/build/build_windows.bat` verified end-to-end
+  with the current receiver (LAN-IP detection, `--new-token`, etc.).
+  Output: a 30 MB self-contained `.exe` with `--console` mode so
+  double-clicking opens a terminal showing the live banner + log.
+- `launch_receiver.bat` at the repo root — dev-mode launcher that
+  opens a console, runs the receiver from source (`python -m
+  trigger_app_AJ.windows.main`), and keeps the window open with
+  `pause` for any traceback inspection.
+
+### Distribution flow
+
+| Audience | Mac | Windows |
+|---|---|---|
+| Dev | `launch_gui.command` (uses local Python) | `launch_receiver.bat` (uses local Python) |
+| Lab members | `Brainsight Monitor.dmg` (drag to Applications) | `TMS Trigger Receiver.exe` (double-click) |
+
+Neither lab deliverable requires Python or any pip install on the
+target machine.
+
+---
+
 ## `gui-v0.1.0` — 2026-05-28
 
 ### Added — `python/brainsight_gui/` (Mac-side Tk GUI)
