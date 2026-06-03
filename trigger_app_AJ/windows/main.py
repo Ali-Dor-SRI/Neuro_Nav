@@ -25,7 +25,6 @@ from datetime import datetime
 
 from trigger_app_AJ.common.config import (
     DEFAULT_PORT,
-    TOKEN_FILENAME,
     get_local_ips,
     load_or_create_token,
     regenerate_token,
@@ -72,14 +71,10 @@ def main():
     if args.token:
         token = args.token
         save_token(token)
-        token_origin = f"--token flag (saved to {TOKEN_FILENAME})"
     elif args.new_token:
         token = regenerate_token()
-        token_origin = f"freshly regenerated (saved to {TOKEN_FILENAME})"
     else:
-        token, is_new = load_or_create_token()
-        token_origin = (f"newly generated (saved to {TOKEN_FILENAME})" if is_new
-                        else f"loaded from {TOKEN_FILENAME}")
+        token, _is_new = load_or_create_token()
 
     # ── Detect LAN IPs ────────────────────────────────────────────────────────
     ips = get_local_ips()
@@ -88,33 +83,38 @@ def main():
     # ── Banner ────────────────────────────────────────────────────────────────
     print()
     print("============================================================")
-    print("  Windows Trigger Receiver")
+    print("  TMS Trigger Receiver  -  ready and waiting for the Mac")
     print("============================================================")
-    print(f"  Listening on  : 0.0.0.0:{args.port}  (all interfaces)")
+    print()
+    print("  Enter these three values in the Mac app:")
+    print()
     if ips:
-        print(f"  Reachable at  : {primary_ip}:{args.port}")
+        print(f"    IP address : {primary_ip}")
         for extra in ips[1:]:
-            print(f"                  {extra}:{args.port}")
+            print(f"                 {extra}   (alternate)")
     else:
-        print(f"  Reachable at  : (no LAN IPs detected - check network)")
-    print(f"  Token         : {token}")
-    print(f"  Token source  : {token_origin}")
-    print(f"  Token file    : {token_path()}")
+        print(f"    IP address : (none detected - check your network connection)")
+    print(f"    Port       : {args.port}")
+    print(f"    Token      : {token}")
+    print()
     if args.no_keystroke:
-        print(f"  Mode          : DRY-RUN (no keystrokes will be sent)")
+        print("  Mode: DRY-RUN - STATE changes are logged but no keystrokes are sent.")
+        print()
     elif not qtrack.is_available():
-        print(f"  WARNING       : pyautogui not installed - keystrokes disabled.")
+        print("  WARNING: pyautogui is not installed - keystrokes are disabled.")
+        print()
+    print("  Keep this window open. Status messages will appear below.")
+    print("============================================================")
     print()
-    print("  On the Mac, run:")
-    print(f"    python3 alert_brainsight_v2.2.0.py <file> \\")
-    print(f"        --trigger-to {primary_ip}:{args.port} \\")
-    print(f"        --token {token}")
-    print()
-    print("  If the Mac reports 'connection timed out':")
-    print(f"    1. Confirm the IP above is reachable from the Mac (ping {primary_ip})")
-    print(f"    2. Allow inbound TCP {args.port} through Windows Defender Firewall")
-    print(f"    3. Confirm both machines are on the same LAN / subnet")
-    print("  If the Mac reports 'AUTH:DENIED': the token is wrong - copy from above.")
+    print("  Troubleshooting")
+    print("  ---------------")
+    print("  If the Mac says 'connection timed out':")
+    print(f"    1. From the Mac, check the IP is reachable:   ping {primary_ip}")
+    print(f"    2. Allow inbound TCP port {args.port} through Windows Defender Firewall")
+    print("    3. Make sure both machines are on the same Wi-Fi / network")
+    print("  If the Mac says 'AUTH:DENIED':")
+    print("    The token does not match - re-enter the Token shown above exactly.")
+    print(f"  Token is saved at: {token_path()}")
     print("============================================================")
     print()
 

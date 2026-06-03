@@ -29,6 +29,7 @@ pyinstaller ^
     --noconfirm ^
     --clean ^
     --name "TMS Trigger Receiver" ^
+    --icon "build\TMS_PC_icon.ico" ^
     --paths .. ^
     --workpath build_intermediate ^
     --distpath dist ^
