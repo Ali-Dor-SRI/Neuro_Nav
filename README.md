@@ -130,5 +130,6 @@ Mirrored to two GitHub accounts:
 
 - `data/` — Brainsight session exports live in the lab data store, not in
   git. They can contain subject identifiers and are large.
-- `tms_token.txt`, `windows_token.txt`, `config.json` — shared-secret
-  tokens are generated per-install and must never be committed.
+- `tms_token.json` (and legacy `tms_token.txt`/`windows_token.txt`),
+  `config.json` — the per-install 4-digit shared-secret token and the Mac's
+  saved connection details. Generated per-install; must never be committed.

@@ -33,6 +33,7 @@ from brainsight_gui.perform_panel  import (
     PerformPanel, DEFAULT_LOC_THR, DEFAULT_ANG_THR,
 )
 from brainsight_gui.setup_panel    import SetupPanel
+from brainsight_gui import config_store
 from brainsight_gui import messages as M
 
 
@@ -65,8 +66,19 @@ class App:
             on_target_changed = self._on_target_changed,
             on_linear_changed = self._on_linear_changed,
             on_angular_changed= self._on_angular_changed,
+            on_follow_toggled = self._on_follow_toggled,
             on_back           = self._on_perform_back,
         )
+        # Remembered connection details: prefill Setup from the last
+        # successful session, and re-save whenever a connection succeeds.
+        self._pending_conn     = None
+        self._saved_on_connect = False
+        saved = config_store.load_connection()
+        if saved:
+            self.setup.prefill(saved.get("windows_ip"),
+                               saved.get("port"),
+                               saved.get("token"))
+
         self._current_view = None   # set by _show_*
         self._show_setup()
 
@@ -76,6 +88,7 @@ class App:
         self.worker.on_drivers_changed    = self._on_drivers_changed
         self.worker.on_link_state         = self._on_link_state
         self.worker.on_thresholds_changed = self._on_thresholds_changed
+        self.worker.on_follow_changed     = self._on_follow_changed
 
         # Apply default thresholds to the panel
         self.perform.set_linear_threshold([DEFAULT_LOC_THR] * 3)
@@ -106,6 +119,9 @@ class App:
     def _on_setup_next(self, filepath, host, port, token):
         """User clicked Next on Setup. Start the worker; transition to
         Perform happens later, when the TCP link comes up."""
+        # Remember these to persist once the link authenticates successfully.
+        self._pending_conn     = (host, port, token)
+        self._saved_on_connect = False
         self.worker.configure(filepath=filepath,
                               trigger_host=host,
                               trigger_port=port,
@@ -147,6 +163,9 @@ class App:
     def _on_angular_changed(self, vec):
         self.worker.set_angular_threshold(vec)
 
+    def _on_follow_toggled(self, enabled):
+        self.worker.set_auto_follow(enabled)
+
     # ── Worker -> UI (already on Tk thread; ui_dispatch routed it here) ─────
 
     def _on_status_message(self, level, message):
@@ -158,7 +177,18 @@ class App:
     def _on_drivers_changed(self, names, active):
         self.perform.populate_drivers(names, active)
 
+    def _on_follow_changed(self, enabled):
+        self.perform.set_follow(enabled)
+
     def _on_link_state(self, connected, info):
+        # On the first successful auth, remember the connection details so the
+        # next launch prefills them (token may rotate weekly on Windows, in
+        # which case the new code gets saved here once it connects).
+        if connected and not self._saved_on_connect and self._pending_conn:
+            host, port, token = self._pending_conn
+            config_store.save_connection(host, port, token)
+            self._saved_on_connect = True
+
         # Still mirror the state on Setup (relevant while still on Setup
         # waiting to connect, AND if the user presses Back later).
         self.setup.set_link_state(connected, info)

@@ -20,15 +20,16 @@ if __name__ == "__main__" and __package__ in (None, ""):
 import argparse
 import signal
 import threading
-import time
 from datetime import datetime
 
 from trigger_app_AJ.common.config import (
     DEFAULT_PORT,
+    current_token,
     get_local_ips,
-    load_or_create_token,
+    is_expired,
     regenerate_token,
     save_token,
+    seconds_until_rotation,
     token_path,
 )
 from trigger_app_AJ.windows import qtrack
@@ -38,6 +39,14 @@ from trigger_app_AJ.windows.server import TriggerReceiver
 def _log(message):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {message}", flush=True)
+
+
+def _rotation_note(issued_at):
+    """Human-readable 'rotates in N days (on <date>)' for the banner/logs."""
+    secs = seconds_until_rotation(issued_at)
+    days = secs / 86400.0
+    when = datetime.fromtimestamp(issued_at + secs).strftime("%a %d %b, %H:%M")
+    return f"rotates in ~{days:.1f} days (on {when})"
 
 
 def main():
@@ -60,7 +69,7 @@ def main():
     args = parser.parse_args()
 
     if args.show_token:
-        tok, _ = load_or_create_token()
+        tok, _issued, _rotated = current_token()
         print(tok)
         return 0
 
@@ -68,13 +77,15 @@ def main():
     if args.new_token and args.token:
         raise SystemExit("Use either --token or --new-token, not both.")
 
+    # auto_rotate: only the managed token rotates weekly. A token pinned with
+    # --token is a deliberate fixed shared secret and is left alone.
+    auto_rotate = args.token is None
     if args.token:
-        token = args.token
-        save_token(token)
+        token, issued_at = save_token(args.token)
     elif args.new_token:
-        token = regenerate_token()
+        token, issued_at = regenerate_token()
     else:
-        token, _is_new = load_or_create_token()
+        token, issued_at, _rotated = current_token()
 
     # ── Detect LAN IPs ────────────────────────────────────────────────────────
     ips = get_local_ips()
@@ -95,7 +106,11 @@ def main():
     else:
         print(f"    IP address : (none detected - check your network connection)")
     print(f"    Port       : {args.port}")
-    print(f"    Token      : {token}")
+    print(f"    Token      : {token}   (4-digit code)")
+    if auto_rotate:
+        print(f"                 {_rotation_note(issued_at)}")
+    else:
+        print(f"                 (fixed via --token; no weekly rotation)")
     print()
     if args.no_keystroke:
         print("  Mode: DRY-RUN - STATE changes are logged but no keystrokes are sent.")
@@ -152,7 +167,15 @@ def main():
 
     try:
         while not stop_event.is_set():
-            time.sleep(0.5)
+            # Weekly rotation: once the managed token is a week old, mint a
+            # fresh one and hand it to the receiver. The currently connected
+            # Mac stays connected; the new code is needed on the next connect.
+            if auto_rotate and is_expired(issued_at):
+                token, issued_at = regenerate_token()
+                receiver.set_token(token)
+                _log("Weekly token rotation — RE-ENTER this code in the Mac app:")
+                _log(f"    Token : {token}   ({_rotation_note(issued_at)})")
+            stop_event.wait(0.5)
     finally:
         _log("Shutting down...")
         receiver.stop()

@@ -46,6 +46,7 @@ Thumbs.db
 # ─── Secrets (NEVER commit) ────────────────────────────────────────────────
 # Shared-secret tokens for the trigger system. Each install generates its own.
 tms_token.txt
+tms_token.json
 windows_token.txt
 *.token
 config.json

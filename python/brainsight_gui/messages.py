@@ -52,6 +52,16 @@ def waiting_for_driver():
 def target_adopted(name):
     return OK, f"Target adopted: {name}"
 
+def target_followed(name):
+    return OK, f"Now tracking '{name}' — followed the Brainsight file's selection"
+
+def follow_enabled():
+    return INFO, ("Auto-follow ON — tracking the target most recently "
+                  "selected in the Brainsight file")
+
+def follow_disabled():
+    return INFO, "Auto-follow OFF — target pinned manually"
+
 def driver_adopted(name):
     return OK, f"Crosshairs driver adopted: {name}"
 

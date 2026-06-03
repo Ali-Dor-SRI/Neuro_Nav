@@ -1,9 +1,11 @@
 """Shared configuration: paths, ports, defaults."""
 
+import json
 import os
 import secrets
 import socket
 import sys
+import time
 
 LISTEN_HOST = "0.0.0.0"
 DEFAULT_PORT = 5050      # 5000 is reserved by macOS AirPlay Receiver since macOS Monterey.
@@ -12,7 +14,12 @@ AUTH_TIMEOUT_SEC      = 5.0    # receiver drops a connection if AUTH doesn't arr
 RECONNECT_INITIAL_SEC = 1
 RECONNECT_MAX_SEC     = 30
 
-TOKEN_FILENAME = "tms_token.txt"
+# The shared secret is a 4-digit numeric code (0000-9999) that rotates once a
+# week. Token + issue time are persisted as JSON so the code survives restarts
+# (the Mac doesn't reconfigure on every receiver restart) but still rotates on
+# schedule.
+TOKEN_FILENAME = "tms_token.json"
+TOKEN_TTL_SEC  = 7 * 24 * 60 * 60      # one week
 
 
 def app_dir():
@@ -30,39 +37,77 @@ def token_path():
     return os.path.join(app_dir(), TOKEN_FILENAME)
 
 
-def load_or_create_token():
-    """Read the token from disk, or generate one and persist it.
+def _now():
+    return time.time()
 
-    Returns (token, is_new). The token survives across runs so the Mac
-    doesn't have to be reconfigured every time the receiver restarts.
+
+def _generate_token():
+    """A fresh 4-digit numeric token, zero-padded (e.g. '0042')."""
+    return f"{secrets.randbelow(10000):04d}"
+
+
+def _write_record(token, issued_at):
+    with open(token_path(), "w") as f:
+        json.dump({"token": token, "issued_at": issued_at}, f)
+    return token, issued_at
+
+
+def _read_record():
+    """Return {'token': str, 'issued_at': float} or None if unreadable.
+
+    Tolerates a legacy plain-text token file (just the token, no JSON) by
+    adopting it with a fresh issue time, so an old install rotates a week
+    from upgrade rather than being treated as instantly expired.
     """
-    path = token_path()
     try:
-        with open(path, "r") as f:
-            token = f.read().strip()
-            if token:
-                return token, False
+        with open(token_path(), "r") as f:
+            raw = f.read().strip()
     except FileNotFoundError:
-        pass
-    return _generate_and_save(path), True
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        token = str(data["token"]).strip()
+        issued_at = float(data["issued_at"])
+        return {"token": token, "issued_at": issued_at} if token else None
+    except (ValueError, KeyError, TypeError):
+        return {"token": raw, "issued_at": _now()}   # legacy plain token
+
+
+def is_expired(issued_at, now=None):
+    now = _now() if now is None else now
+    return (now - issued_at) >= TOKEN_TTL_SEC
+
+
+def seconds_until_rotation(issued_at, now=None):
+    now = _now() if now is None else now
+    return max(0.0, TOKEN_TTL_SEC - (now - issued_at))
+
+
+def current_token():
+    """Return (token, issued_at, rotated).
+
+    Loads the persisted token; if it's missing or older than a week, mints a
+    new 4-digit token and persists it with a fresh issue time. `rotated` is
+    True when a new token was written.
+    """
+    rec = _read_record()
+    if rec is not None and not is_expired(rec["issued_at"]):
+        return rec["token"], rec["issued_at"], False
+    token, issued_at = _write_record(_generate_token(), _now())
+    return token, issued_at, True
 
 
 def regenerate_token():
-    """Discard any persisted token and write a fresh one. Returns the new token."""
-    return _generate_and_save(token_path())
+    """Force a fresh token now. Returns (token, issued_at)."""
+    return _write_record(_generate_token(), _now())
 
 
 def save_token(token):
-    """Write a specific token string to disk (for --token override + persist)."""
-    with open(token_path(), "w") as f:
-        f.write(token + "\n")
-
-
-def _generate_and_save(path):
-    token = secrets.token_urlsafe(12)
-    with open(path, "w") as f:
-        f.write(token + "\n")
-    return token
+    """Persist a specific token with a fresh issue time (for --token override).
+    Returns (token, issued_at)."""
+    return _write_record(token, _now())
 
 
 def get_local_ips():

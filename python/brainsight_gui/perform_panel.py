@@ -32,6 +32,7 @@ class PerformPanel(ttk.LabelFrame):
                  on_target_changed=None,
                  on_linear_changed=None,
                  on_angular_changed=None,
+                 on_follow_toggled=None,
                  on_back=None,
                  **kwargs):
         super().__init__(master, text="Module 2 — Perform", padding=10, **kwargs)
@@ -39,6 +40,7 @@ class PerformPanel(ttk.LabelFrame):
         self._on_target_changed  = on_target_changed  or (lambda name: None)
         self._on_linear_changed  = on_linear_changed  or (lambda vec: None)
         self._on_angular_changed = on_angular_changed or (lambda vec: None)
+        self._on_follow_toggled  = on_follow_toggled  or (lambda enabled: None)
         self._on_back            = on_back            or (lambda: None)
 
         self._enabled = False  # Setup must run before this becomes active
@@ -73,6 +75,17 @@ class PerformPanel(ttk.LabelFrame):
                                            state="readonly", width=32)
         self._target_combo.grid(row=1, column=1, sticky="ew")
         self._target_combo.bind("<<ComboboxSelected>>", self._on_target_select)
+
+        # Auto-follow: when checked, the active target tracks the most-recently
+        # selected target in the Brainsight file. Picking from the dropdown
+        # above pins a target and clears this automatically.
+        self._follow_var = tk.BooleanVar(value=True)
+        self._follow_check = ttk.Checkbutton(
+            dd_frame,
+            text="Auto-follow target selected in the Brainsight file",
+            variable=self._follow_var,
+            command=self._on_follow_toggle)
+        self._follow_check.grid(row=2, column=1, sticky="w", pady=(4, 0))
 
         dd_frame.columnconfigure(1, weight=1)
 
@@ -114,6 +127,7 @@ class PerformPanel(ttk.LabelFrame):
         state = "readonly" if enabled else "disabled"
         self._driver_combo.config(state=state)
         self._target_combo.config(state=state)
+        self._follow_check.config(state="normal" if enabled else "disabled")
         # ThresholdWidget contains sliders and entries; toggle children
         for child in self._iter_threshold_children():
             try:
@@ -143,6 +157,12 @@ class PerformPanel(ttk.LabelFrame):
             self._target_var.set(active)
         elif names and not self._target_var.get():
             self._target_var.set(names[0])
+
+    def set_follow(self, enabled):
+        """Reflect the worker's auto-follow state in the checkbox. Setting the
+        variable programmatically does NOT fire the command callback, so this
+        won't loop back into the worker."""
+        self._follow_var.set(bool(enabled))
 
     def set_linear_threshold(self, vec3):
         self._linear_widget.set(vec3)
@@ -176,6 +196,9 @@ class PerformPanel(ttk.LabelFrame):
         name = self._target_var.get()
         if name:
             self._on_target_changed(name)
+
+    def _on_follow_toggle(self):
+        self._on_follow_toggled(self._follow_var.get())
 
     def _on_linear(self, vec):
         if self._enabled:

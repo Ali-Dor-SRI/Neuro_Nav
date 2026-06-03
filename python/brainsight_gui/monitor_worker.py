@@ -261,6 +261,12 @@ class MonitorWorker:
         self._all_targets = {}              # name -> dict
         self._all_drivers = []              # list[str]
 
+        # Auto-follow: when True, the active target tracks the most-recently
+        # selected Target Selection (MNI) row in the file. A manual pick
+        # (set_target) turns this off so the operator can pin one target.
+        self._auto_follow        = True
+        self._last_selected_name = None     # most-recent file selection seen
+
         # Loop state
         self._reset_requested = False
         self._stop_event = threading.Event()
@@ -273,6 +279,7 @@ class MonitorWorker:
         self.on_drivers_changed     = lambda names, active: None
         self.on_link_state          = lambda connected, info: None
         self.on_thresholds_changed  = lambda loc, ang: None
+        self.on_follow_changed      = lambda enabled: None
 
     # ── Setters (call from UI thread) ────────────────────────────────────────
 
@@ -285,19 +292,44 @@ class MonitorWorker:
             self._trigger_token = trigger_token
 
     def set_target(self, name):
-        """Switch active target by exact name. No-op if not in the pool."""
+        """Manually pin the active target by exact name. Turns auto-follow
+        OFF so the file's selections no longer override the operator's pick.
+        No-op if not in the pool."""
         with self._lock:
             if name in self._all_targets:
                 self._active_target_name = name
                 self._active_target      = self._all_targets[name]
+                self._auto_follow        = False
                 self._reset_requested    = True
                 changed = True
             else:
                 changed = False
         if changed:
             self._dispatch(self.on_status_message, M.INFO,
-                           f"Target set to: {name}")
+                           f"Target pinned to: {name} (auto-follow off)")
+            self._dispatch(self.on_follow_changed, False)
             self._emit_targets()
+
+    def set_auto_follow(self, enabled):
+        """Enable/disable auto-follow. When enabling, immediately jump to the
+        file's most-recently selected target (if one has been seen)."""
+        enabled = bool(enabled)
+        with self._lock:
+            self._auto_follow = enabled
+            followed = None
+            if (enabled and self._last_selected_name is not None
+                    and self._last_selected_name in self._all_targets
+                    and self._active_target_name != self._last_selected_name):
+                self._active_target_name = self._last_selected_name
+                self._active_target      = self._all_targets[self._last_selected_name]
+                self._reset_requested    = True
+                followed = self._last_selected_name
+        self._dispatch(self.on_status_message,
+                       *(M.follow_enabled() if enabled else M.follow_disabled()))
+        if followed is not None:
+            self._dispatch(self.on_status_message, *M.target_followed(followed))
+        self._dispatch(self.on_follow_changed, enabled)
+        self._emit_targets()
 
     def set_driver(self, name):
         with self._lock:
@@ -509,6 +541,7 @@ class MonitorWorker:
         latest_pointer = None
         new_targets = []
         new_drivers = []
+        batch_last_target = None    # most-recent Target Selection (MNI) in batch
 
         with self._lock:
             cur_driver = self._active_driver_name
@@ -529,29 +562,39 @@ class MonitorWorker:
                     latest_pointer = parsed
             elif row_type == "Target Selection":
                 parsed = _parse_target_row(parts)
+                # Null / non-MNI rows (e.g. "<No Selection>") are ignored;
+                # the last real target keeps being tracked.
                 if not parsed or parsed["coord_system"] != COORD_SYS:
                     continue
                 with self._lock:
                     is_new = parsed["name"] not in self._all_targets
                     self._all_targets[parsed["name"]] = parsed
+                    self._last_selected_name = parsed["name"]
                     if self._active_target_name == parsed["name"]:
                         # refresh geometry of the active target
                         self._active_target = parsed
                 if is_new:
                     new_targets.append(parsed["name"])
+                batch_last_target = parsed["name"]
 
-        # ── Auto-adopt first ones if nothing active yet
-        for name in new_targets:
+        # ── Follow the file's most-recent selection ─────────────────────────
+        # Switch when auto-follow is on, or unconditionally for the very first
+        # selection (so monitoring can start even if follow is off and nothing
+        # is pinned yet). A pinned target (follow off) is never overridden.
+        if batch_last_target is not None:
             with self._lock:
-                if self._active_target is None:
-                    self._active_target_name = name
-                    self._active_target      = self._all_targets[name]
+                had_target = self._active_target_name is not None
+                switch = ((self._auto_follow or self._active_target_name is None)
+                          and self._active_target_name != batch_last_target)
+                if switch:
+                    self._active_target_name = batch_last_target
+                    self._active_target      = self._all_targets[batch_last_target]
                     self._reset_requested    = True
-                    adopted = True
-                else:
-                    adopted = False
-            if adopted:
-                self._dispatch(self.on_status_message, *M.target_adopted(name))
+            if switch:
+                msg = M.target_followed if had_target else M.target_adopted
+                self._dispatch(self.on_status_message, *msg(batch_last_target))
+            self._emit_targets()
+        elif new_targets:
             self._emit_targets()
 
         for name in new_drivers:

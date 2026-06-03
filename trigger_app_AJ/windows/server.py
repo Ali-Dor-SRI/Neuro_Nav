@@ -49,6 +49,13 @@ class TriggerReceiver:
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
+    def set_token(self, token):
+        """Replace the accepted token (used by the weekly rotation). Existing
+        authenticated connections are unaffected; new connections must use the
+        new token."""
+        with self._lock:
+            self.token = token
+
     def start(self):
         self.running = True
         threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -104,7 +111,9 @@ class TriggerReceiver:
             return
 
         offered = line[len(proto.PREFIX_AUTH):]
-        if not hmac.compare_digest(offered, self.token):
+        with self._lock:
+            expected = self.token
+        if not hmac.compare_digest(offered, expected):
             self._on_log(f"Rejected {addr_str}: invalid token")
             _send_and_close(sock, proto.AUTH_DENIED + "\n")
             return

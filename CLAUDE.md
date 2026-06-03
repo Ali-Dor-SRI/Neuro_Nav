@@ -15,18 +15,26 @@ Neuro_Nav/
 ├── data/                        Raw session exports from Brainsight
 │   ├── Session 3  Streamed Info.txt
 │   └── Session 6_ Streamed Info.txt
+├── launch_gui.command           Double-click launcher for the Mac GUI
 ├── python/                      Python tools — run from the project root
 │   ├── parse_brainsight.py      Shared parser library (import in other scripts)
 │   ├── monitor_brainsight.py    Polls a file and reports accessibility every 5 s
 │   ├── alert_brainsight_v1.py   Drift alert tool — v1
-│   └── alert_brainsight_v2.py   Drift alert tool — v2 (current)
+│   ├── alert_brainsight_v2.py   Drift alert tool — v2
+│   ├── alert_brainsight_v2.0.1.py
+│   ├── alert_brainsight_v2.1.0.py   per-axis thresholds
+│   ├── alert_brainsight_v2.2.0.py   + TCP trigger output to Windows receiver
+│   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target  (current)
+│   └── brainsight_gui/          Tk GUI wrapping the monitor + trigger sender
 ├── R/                           R scripts — run via RStudio with Neuro_Nav.Rproj open
 │   ├── parse_brainsight.R       Shared parser library (source in other scripts)
 │   ├── explore.R                2D/3D coil trajectory visualization (Session 3)
 │   └── multi_target_explore.R  Multi-target exploration (Session 6)
 └── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
-    ├── README.md
-    └── TMS_CrossPlatform_Trigger_System.md
+    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.3.0)
+    ├── TMS_CrossPlatform_Trigger_System.md
+    ├── common/                 Protocol constants + config (port, 4-digit weekly token)
+    └── windows/                TCP receiver that types `ss`+Enter into QTrack
 ```
 
 ---
@@ -83,43 +91,92 @@ python3 python/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
 Reports file size and growth every 5 s. Useful to confirm a live session
 file is being written before starting more complex tools.
 
-### Drift alert — `python/alert_brainsight_v2.py`  ← current version
+### Drift alert — `python/alert_brainsight_v2.3.0.py`  ← current version
 
 ```bash
-python3 python/alert_brainsight_v2.py "data/Session 3  Streamed Info.txt"
-python3 python/alert_brainsight_v2.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+python3 python/alert_brainsight_v2.3.0.py "data/Session 3  Streamed Info.txt"
+python3 python/alert_brainsight_v2.3.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+
+# Send STATE:RED / STATE:GREEN triggers to the Windows receiver on transitions:
+python3 python/alert_brainsight_v2.3.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+
+# Pin a target manually instead of auto-following the file:
+python3 python/alert_brainsight_v2.3.0.py "<file>" --no-follow
 ```
 
 **Startup flow:**
-1. Scans the file for all `Target Selection` names and `Crosshairs Position`
-   driver names, then presents numbered menus to pick the active target and driver.
-2. Monitors at **2 Hz** (every 0.5 s — 10× slower than the 20 Hz write rate).
-3. Alerts when the pointer drifts beyond the linear or angular threshold.
+1. (If `--trigger-to`) establishes the TCP trigger link to Windows first.
+2. Scans the file for all `Target Selection` names and `Crosshairs Position`
+   driver names. With auto-follow on (default) it adopts the most-recent
+   selection; with `--no-follow` it presents a numbered menu to pick one.
+   The driver is always picked from a menu.
+3. Monitors at **2 Hz** (every 0.5 s — 10× slower than the 20 Hz write rate).
+4. Alerts (per-axis: 3 linear + 3 angular DoF) when any DoF drifts beyond
+   its threshold; with `--trigger-to`, fires triggers on transitions only.
+
+**Auto-follow target** (v2.3.0): the active target tracks the target most
+recently selected in the Brainsight file — operators change the target once,
+in Brainsight, and the monitor (and any Windows trigger) follow. `<No
+Selection>` / `(null)` rows are ignored (last real target keeps tracking).
+A manual `set target` **pins** a target and turns follow off; `set follow on`
+resumes. Default ON; start with `--no-follow` for the classic pinned mode.
 
 **Default thresholds:**
 
 | Parameter | Default | Meaning                          |
 |-----------|---------|----------------------------------|
-| `--loc`   | 40 mm   | Euclidean distance to target     |
-| `--ang`   | 0.2 rad | Geodesic rotation angle (~11.5°) |
+| `--loc`   | 40 mm   | Per-axis linear offset to target |
+| `--ang`   | 0.2 rad | Per-axis tilt angle (~11.5°)     |
 
-Angular distance formula: `θ = arccos((trace(Rᵀ·R) − 1) / 2)`
+Per-axis tilt: angle between the target's i-th basis vector and the
+pointer's i-th basis vector (frame-free; no Euler convention / gimbal lock).
 
 **Live commands while running:**
 
 ```
-list                  show available targets and drivers
-set target <n|name>   switch active target (resets alert state)
+list                  show available targets and drivers (+ follow state)
+set target <n|name>   pin active target (turns auto-follow OFF; resets alert state)
 set driver <n|name>   switch active driver (resets alert state)
-set loc <mm>          change linear threshold
-set ang <rad>         change angular threshold
+set follow on|off     toggle auto-follow of the file's target selection
+set loc <mm>          linear threshold — scalar (all axes)
+set loc <x> <y> <z>   linear threshold — per-axis
+set ang <rad>         angular threshold — scalar (all axes)
+set ang <x> <y> <z>   angular threshold — per-axis
 set remind <n>        reminder every N checks (default 100, ~50 s)
-status                print current settings
+status                print current settings (incl. follow + trigger link)
 quit                  stop
 ```
 
 Waiting/status messages are **rate-limited to once every 5 s**;
 alert and reminder messages fire immediately.
+
+### Mac GUI — `python/brainsight_gui/` (`python -m brainsight_gui`)
+
+Tk wrapper around the v2.3.0 monitor + trigger sender. Two-step wizard:
+**Setup** (file path, Windows IP/port/token, Connect & Start) →  **Perform**
+(driver + target dropdowns, per-axis threshold sliders, scrolling log).
+The backend is `monitor_worker.MonitorWorker` (mirrors the CLI logic with
+callbacks instead of `print`/REPL). Auto-follow is exposed as the
+"Auto-follow target selected in the Brainsight file" checkbox; picking from
+the Target dropdown pins a target and unchecks it. `launch_gui.command`
+double-click-launches it on the Mac.
+
+`brainsight_gui/config_store.py` persists the Windows IP, port, and token to
+`~/Library/Application Support/Neuro_Nav/config.json` after a successful
+connection and prefills them on the next launch (the Brainsight file path is
+not saved — it changes per session).
+
+### Trigger token — `trigger_app_AJ/common/config.py`
+
+The Mac↔Windows shared secret is a **4-digit numeric code** (`0000`–`9999`)
+that **rotates once a week**. The Windows receiver stores the code and its
+issue time in `tms_token.json` (next to the .exe / package), mints a fresh
+one at startup if it's >7 days old, and also rotates **live** when the week
+elapses while running (logging the new code). `--token <code>` pins a fixed
+code and disables rotation; `--new-token` forces a fresh one; `--show-token`
+prints the current code. The Mac GUI remembers the code between launches, so
+operators only re-enter it after the weekly rotation. (Both token files and
+`config.json` are git-ignored.)
 
 ---
 
@@ -167,10 +224,13 @@ work in progress.
 ## Versioning convention
 
 Python monitoring/alert scripts are versioned in the filename:
-`alert_brainsight_v1.py`, `alert_brainsight_v2.py`, …
+`alert_brainsight_v1.py`, `alert_brainsight_v2.py`,
+`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.3.0.py`.
 
 Keep old versions in `python/` — do not delete them. The highest version
-number is always the current one.
+number is always the current one (currently **v2.3.0**). The `brainsight_gui/`
+package tracks the latest CLI version's logic rather than carrying a version
+in its name.
 
 ---
 
@@ -191,6 +251,9 @@ Target used for drift testing: `test_target` (future sessions); `Sample 2` (Sess
 
 **Python** — standard library only, except:
 - `pandas` (parse_brainsight.py)
+- `pyautogui` (Windows trigger receiver only — `trigger_app_AJ/windows/`)
+
+The alert scripts and the Tk GUI (`brainsight_gui/`) are stdlib-only.
 
 **R:**
 - `tidyverse`

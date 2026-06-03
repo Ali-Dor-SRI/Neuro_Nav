@@ -43,6 +43,17 @@ class SetupPanel(ttk.LabelFrame):
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def prefill(self, windows_ip=None, port=None, token=None):
+        """Populate saved connection fields on launch. Empty/None values are
+        left at their current defaults. The Brainsight file path is never
+        prefilled (it changes per session)."""
+        if windows_ip:
+            self._ip_var.set(str(windows_ip))
+        if port:
+            self._port_var.set(str(port))
+        if token:
+            self._token_var.set(str(token))
+
     def set_link_state(self, connected, info=""):
         """Called by the controller to reflect the current TCP link state."""
         if connected:
