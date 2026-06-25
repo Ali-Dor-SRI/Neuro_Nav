@@ -87,6 +87,10 @@ TRIGGER_LINE_LIMIT            = 256
 # canonical definition).
 PREFIX_AUTH  = "AUTH:"
 PREFIX_STATE = "STATE:"
+PREFIX_TIME     = "TIME:"
+PREFIX_TIMEACK  = "TIMEACK:"
+PREFIX_TIMESYNC = "TIMESYNC:"
+PREFIX_TIMEOK   = "TIMEOK:"
 AUTH_OK      = "AUTH:OK"
 AUTH_DENIED  = "AUTH:DENIED"
 STATE_GREEN  = "GREEN"
@@ -324,6 +328,43 @@ class TriggerSender:
             self._on_log(f"  [trigger] send failed: {exc}")
             return False
 
+    def _time_sync(self, sock):
+        """Round-trip clock sync with the Windows receiver (NTP-style).
+
+        Sends our clock, reads Windows' TIMEACK, replies with our two
+        timestamps so Windows can compute the offset and log it, then reads
+        the TIMEOK confirmation (which carries the result back for display).
+        Best-effort: any failure is logged and swallowed so the trigger link
+        proceeds regardless.
+        """
+        try:
+            sock.settimeout(TRIGGER_AUTH_TIMEOUT_SEC)
+            t1 = time.time()
+            sock.sendall(f"{PREFIX_TIME}{t1:.6f}\n".encode("utf-8"))
+            ack = _read_line(sock, limit=TRIGGER_LINE_LIMIT)
+            t4 = time.time()
+            if not ack.startswith(PREFIX_TIMEACK):
+                self._on_log(f"  [time-sync] unexpected reply: {ack!r}")
+                return
+            # We don't need t2/t3 on the Mac — Windows computes the delta.
+            sock.sendall(f"{PREFIX_TIMESYNC}{t1:.6f} {t4:.6f}\n".encode("utf-8"))
+            ok = _read_line(sock, limit=TRIGGER_LINE_LIMIT)
+            if not ok.startswith(PREFIX_TIMEOK):
+                self._on_log(f"  [time-sync] unexpected confirmation: {ok!r}")
+                return
+            parts = ok[len(PREFIX_TIMEOK):].strip().split()
+            if len(parts) >= 2:
+                offset, delay = float(parts[0]), float(parts[1])
+                sign = "ahead of" if offset >= 0 else "behind"
+                self._on_log(
+                    f"  [time-sync] OK — Windows logged our timestamp; "
+                    f"Windows clock is {abs(offset) * 1000.0:.1f} ms {sign} the Mac "
+                    f"(delta {offset:+.6f}s, rtt {delay * 1000.0:.1f} ms)")
+            else:
+                self._on_log("  [time-sync] OK — Windows logged our timestamp")
+        except (OSError, ValueError) as exc:
+            self._on_log(f"  [time-sync] failed (continuing without sync): {exc}")
+
     def _connection_loop(self):
         attempt = 0
         while not self._stop_event.is_set():
@@ -345,6 +386,11 @@ class TriggerSender:
                     else:
                         self._on_log(f"  [trigger] unexpected response: {first!r}")
                     raise OSError("authentication failed")
+
+                # Time-sync handshake on the freshly-authed socket, before any
+                # STATE traffic can interleave. Best-effort: a sync failure is
+                # logged but must not abort the trigger link.
+                self._time_sync(sock)
 
                 sock.settimeout(None)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)

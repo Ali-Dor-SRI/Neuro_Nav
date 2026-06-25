@@ -9,6 +9,18 @@ Handshake (Windows -> Mac):
     AUTH:OK\\n        (token accepted)
     AUTH:DENIED\\n    (token mismatch; Windows then closes the socket)
 
+Time-sync handshake (round-trip / NTP-style, runs once right after AUTH:OK,
+before any STATE traffic):
+    Mac -> Windows:  TIME:<t1>\\n          t1 = Mac epoch when sent
+    Windows -> Mac:  TIMEACK:<t2> <t3>\\n   t2 = Win recv epoch, t3 = Win send epoch
+    Mac -> Windows:  TIMESYNC:<t1> <t4>\\n  t4 = Mac epoch when TIMEACK arrived
+    Windows -> Mac:  TIMEOK:<offset> <delay>\\n   result echoed back to the Mac
+
+Windows computes the clock offset itself from its own t2/t3 plus the Mac's
+t1/t4 (offset = ((t2-t1)+(t3-t4))/2 = Windows_clock - Mac_clock), appends it
+to its time-sync log, and the TIMEOK reply doubles as the "timestamp received
+and logged" notification to the Mac. See common/timesync.py for the maths.
+
 Steady state (Mac -> Windows):
     STATE:GREEN\\n    sent on out-of-range -> in-range transition
     STATE:RED\\n      sent on in-range -> out-of-range transition
@@ -23,6 +35,11 @@ authenticated connection replaces the older one.
 
 PREFIX_AUTH  = "AUTH:"
 PREFIX_STATE = "STATE:"
+
+PREFIX_TIME     = "TIME:"
+PREFIX_TIMEACK  = "TIMEACK:"
+PREFIX_TIMESYNC = "TIMESYNC:"
+PREFIX_TIMEOK   = "TIMEOK:"
 
 AUTH_OK     = "AUTH:OK"
 AUTH_DENIED = "AUTH:DENIED"
@@ -58,3 +75,28 @@ def make_auth(token):
 
 def make_state(state):
     return f"{PREFIX_STATE}{state}\n".encode("utf-8")
+
+
+# ── Time-sync messages ─────────────────────────────────────────────────────────
+# Epochs are Unix time (seconds, UTC) as plain floats so the two machines compare
+# on the same scale regardless of local timezone.
+
+def make_time(t1):
+    return f"{PREFIX_TIME}{t1:.6f}\n".encode("utf-8")
+
+def make_timeack(t2, t3):
+    return f"{PREFIX_TIMEACK}{t2:.6f} {t3:.6f}\n".encode("utf-8")
+
+def make_timesync(t1, t4):
+    return f"{PREFIX_TIMESYNC}{t1:.6f} {t4:.6f}\n".encode("utf-8")
+
+def make_timeok(offset, delay):
+    return f"{PREFIX_TIMEOK}{offset:.6f} {delay:.6f}\n".encode("utf-8")
+
+def parse_floats_after(line, prefix, count):
+    """Parse `count` space-separated floats from the body of `line` after
+    `prefix`. Raises ValueError if the count or numeric format is wrong."""
+    parts = line[len(prefix):].strip().split()
+    if len(parts) < count:
+        raise ValueError(f"expected {count} value(s) after {prefix!r}, got {line!r}")
+    return tuple(float(p) for p in parts[:count])

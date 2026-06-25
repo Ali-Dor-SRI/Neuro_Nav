@@ -41,10 +41,11 @@ both sides — no GUIs.
 ```
 trigger_app_AJ/
 ├── common/
-│   ├── protocol.py            AUTH + STATE line format
+│   ├── protocol.py            AUTH + STATE + TIME line format
+│   ├── timesync.py            clock-offset maths + time_sync_log.txt writer
 │   └── config.py              port, paths, token load/save
 ├── windows/
-│   ├── server.py              TCP listener + auth + STATE dispatch
+│   ├── server.py              TCP listener + auth + STATE/TIME dispatch
 │   ├── qtrack.py              ss+Enter keystroke (pyautogui)
 │   └── main.py                CLI entry point
 ├── build/
@@ -210,6 +211,22 @@ AUTH:OK            ← token accepted
 AUTH:DENIED        ← token mismatch; Windows then closes the socket
 ```
 
+**Time-sync (round-trip, once right after AUTH:OK, before any STATE traffic):**
+```
+Mac → Win:  TIME:<t1>            t1 = Mac epoch when sent
+Win → Mac:  TIMEACK:<t2> <t3>    t2 = Win recv epoch, t3 = Win send epoch
+Mac → Win:  TIMESYNC:<t1> <t4>   t4 = Mac epoch when TIMEACK arrived
+Win → Mac:  TIMEOK:<offset> <delay>   ← result + "received & logged" notice
+```
+Windows computes the clock offset itself —
+`offset = ((t2-t1)+(t3-t4))/2 = Windows_clock − Mac_clock` (positive ⇒ Windows
+ahead) — and `delay` is the round-trip network time, which the formula cancels
+out of `offset`. Each result is appended to **`time_sync_log.txt`** (next to the
+`.exe`, git-ignored). To align the neuronav (Mac) and TMS/EMG (Windows)
+recordings: `windows_time = mac_time + offset`. The `TIMEOK` reply is the
+Mac's confirmation that its timestamp was received and logged; the sync is
+best-effort and a failure does not abort the trigger link.
+
 **Steady state (Mac → Windows):**
 ```
 STATE:RED          ← sent on in-range → out-of-range transition
@@ -217,7 +234,8 @@ STATE:GREEN        ← sent on out-of-range → in-range transition
 ```
 
 A newer authenticated Mac connection replaces the older one
-(`Replacing previous Mac connection` shows in the receiver log).
+(`Replacing previous Mac connection` shows in the receiver log). Each new
+connection re-runs the time-sync, so reconnects refresh the offset.
 
 ---
 
@@ -300,9 +318,10 @@ the 4-digit code and its weekly rotation schedule survive upgrades.
 
 | Path                                       | Purpose                                          |
 |--------------------------------------------|--------------------------------------------------|
-| `common/protocol.py`                       | `AUTH:` / `STATE:` constants + line reader       |
+| `common/protocol.py`                       | `AUTH:` / `STATE:` / `TIME:` constants + builders + line reader |
+| `common/timesync.py`                       | Clock-offset maths + `time_sync_log.txt` writer  |
 | `common/config.py`                         | Port, timeouts, 4-digit token + weekly rotation  |
-| `windows/server.py`                        | TCP listener, auth, STATE dispatch               |
+| `windows/server.py`                        | TCP listener, auth, STATE + time-sync dispatch   |
 | `windows/qtrack.py`                        | `ss`+Enter via pyautogui                         |
 | `windows/main.py`                          | CLI entry: `python -m trigger_app_AJ.windows.main` |
 | `build/build_windows.bat`                  | PyInstaller .exe builder                         |

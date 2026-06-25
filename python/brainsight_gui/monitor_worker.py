@@ -43,6 +43,10 @@ TRIGGER_RECONNECT_MAX_SEC     = 30
 # canonical definition).
 PREFIX_AUTH  = "AUTH:"
 PREFIX_STATE = "STATE:"
+PREFIX_TIME     = "TIME:"
+PREFIX_TIMEACK  = "TIMEACK:"
+PREFIX_TIMESYNC = "TIMESYNC:"
+PREFIX_TIMEOK   = "TIMEOK:"
 AUTH_OK      = "AUTH:OK"
 AUTH_DENIED  = "AUTH:DENIED"
 STATE_GREEN  = "GREEN"
@@ -182,6 +186,8 @@ class _TriggerSender:
                         auth_denied = True
                         self._on_log(*M.auth_denied())
                     raise OSError("authentication failed")
+                # Round-trip clock sync before any STATE traffic. Best-effort.
+                self._time_sync(sock)
                 sock.settimeout(None)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 with self._sock_lock:
@@ -213,6 +219,30 @@ class _TriggerSender:
                            TRIGGER_RECONNECT_MAX_SEC)
             if self._stop_event.wait(timeout=wait):
                 break
+
+    def _time_sync(self, sock):
+        """Round-trip clock sync with the Windows receiver. Windows computes
+        and logs the offset; the TIMEOK reply carries the result back here for
+        display. Best-effort — failures are logged but don't drop the link."""
+        try:
+            sock.settimeout(5.0)
+            t1 = time.time()
+            sock.sendall(f"{PREFIX_TIME}{t1:.6f}\n".encode("utf-8"))
+            ack = _read_line(sock)
+            t4 = time.time()
+            if not ack.startswith(PREFIX_TIMEACK):
+                self._on_log(*M.time_sync_failed(f"unexpected reply {ack!r}"))
+                return
+            sock.sendall(f"{PREFIX_TIMESYNC}{t1:.6f} {t4:.6f}\n".encode("utf-8"))
+            ok = _read_line(sock)
+            if not ok.startswith(PREFIX_TIMEOK):
+                self._on_log(*M.time_sync_failed(f"unexpected confirmation {ok!r}"))
+                return
+            parts = ok[len(PREFIX_TIMEOK):].strip().split()
+            if len(parts) >= 2:
+                self._on_log(*M.time_synced(float(parts[0]), float(parts[1])))
+        except (OSError, ValueError) as exc:
+            self._on_log(*M.time_sync_failed(str(exc)))
 
     def _read_until_closed(self, sock):
         while not self._stop_event.is_set():

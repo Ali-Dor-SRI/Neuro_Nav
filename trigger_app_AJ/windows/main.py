@@ -32,6 +32,7 @@ from trigger_app_AJ.common.config import (
     seconds_until_rotation,
     token_path,
 )
+from trigger_app_AJ.common.timesync import timesync_log_path
 from trigger_app_AJ.windows import qtrack
 from trigger_app_AJ.windows.server import TriggerReceiver
 
@@ -130,6 +131,7 @@ def main():
     print("  If the Mac says 'AUTH:DENIED':")
     print("    The token does not match - re-enter the Token shown above exactly.")
     print(f"  Token is saved at: {token_path()}")
+    print(f"  Time-sync log:     {timesync_log_path()}")
     print("============================================================")
     print()
 
@@ -150,11 +152,17 @@ def main():
         else:
             _log("Mac disconnected; awaiting new connection")
 
+    def on_timesync(offset, delay, peer_str):
+        sign = "ahead of" if offset >= 0 else "behind"
+        _log(f"Clock offset: Windows is {abs(offset) * 1000.0:.1f} ms {sign} the Mac "
+             f"(delta {offset:+.6f} s, rtt {delay * 1000.0:.2f} ms)")
+
     receiver = TriggerReceiver(
         token         = token,
         port          = args.port,
         on_state      = on_state,
         on_peer_change= on_peer_change,
+        on_timesync   = on_timesync,
         on_log        = _log,
     )
     receiver.start()

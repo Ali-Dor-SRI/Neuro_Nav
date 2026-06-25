@@ -43,6 +43,15 @@ def connection_lost(reason=""):
 def auth_denied():
     return ALERT, "Auth rejected by Windows — check the token"
 
+def time_synced(offset, delay):
+    sign = "ahead of" if offset >= 0 else "behind"
+    return OK, (f"Time-sync OK — Windows logged our timestamp; Windows clock is "
+                f"{abs(offset) * 1000.0:.1f} ms {sign} the Mac "
+                f"(delta {offset:+.6f}s, rtt {delay * 1000.0:.1f} ms)")
+
+def time_sync_failed(reason):
+    return WARN, f"Time-sync skipped ({reason}) — trigger link continues"
+
 def waiting_for_target():
     return INFO, "Waiting for target selection — no Target Selection row yet"
 

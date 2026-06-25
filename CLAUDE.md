@@ -33,8 +33,8 @@ Neuro_Nav/
 └── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
     ├── README.md               Wire protocol + run instructions (current Mac sender: v2.3.0)
     ├── TMS_CrossPlatform_Trigger_System.md
-    ├── common/                 Protocol constants + config (port, 4-digit weekly token)
-    └── windows/                TCP receiver that types `ss`+Enter into QTrack
+    ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
+    └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_log.txt)
 ```
 
 ---
@@ -177,6 +177,32 @@ code and disables rotation; `--new-token` forces a fresh one; `--show-token`
 prints the current code. The Mac GUI remembers the code between launches, so
 operators only re-enter it after the weekly rotation. (Both token files and
 `config.json` are git-ignored.)
+
+### Time sync — `trigger_app_AJ/common/timesync.py`
+
+So events recorded on the Mac (neuronav/Brainsight) can be lined up with the
+TMS/EMG files recorded on Windows (QTrack), the two clocks are compared **once
+per connection**, right after `AUTH:OK` and before any `STATE:` traffic. The
+exchange is round-trip (NTP-style) so network latency is cancelled, not folded
+into the result:
+
+```
+Mac → Win:  TIME:<t1>            t1 = Mac epoch when sent
+Win → Mac:  TIMEACK:<t2> <t3>    t2 = Win recv epoch, t3 = Win send epoch
+Mac → Win:  TIMESYNC:<t1> <t4>   t4 = Mac epoch when TIMEACK arrived
+Win → Mac:  TIMEOK:<offset> <delay>
+```
+
+Windows computes the offset itself: `offset = ((t2-t1)+(t3-t4))/2 =
+Windows_clock − Mac_clock` (positive ⇒ Windows ahead), with `delay` the
+round-trip network time. To map a Mac/neuronav timestamp onto the Windows clock:
+**`windows_time = mac_time + offset`**. Each result is appended to
+**`time_sync_log.txt`** (next to the .exe / package, git-ignored): one
+tab-separated row per sync with both machines' local wall-clock times, the
+delta, the round-trip delay, and the four raw epochs. The `TIMEOK` reply is the
+Mac's notification that its timestamp was received and logged (surfaced in the
+CLI log and the GUI log). The whole exchange is **best-effort** — a sync failure
+is logged but never aborts the trigger link. A reconnect re-runs the sync.
 
 ---
 

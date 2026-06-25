@@ -13,8 +13,10 @@ caller (main.py) just polls callbacks.
 import hmac
 import socket
 import threading
+import time
 
 from trigger_app_AJ.common import protocol as proto
+from trigger_app_AJ.common import timesync
 from trigger_app_AJ.common.config import (
     AUTH_TIMEOUT_SEC,
     DEFAULT_PORT,
@@ -29,21 +31,26 @@ class TriggerReceiver:
     thread-safe or marshal as appropriate):
         on_state(state, is_change)     # GREEN / RED; is_change is False on duplicates
         on_peer_change(connected, addr_str)
+        on_timesync(offset, delay, peer_str)   # clock offset (Win - Mac), seconds
         on_log(message)
     """
 
     def __init__(self, token, port=DEFAULT_PORT,
-                 on_state=None, on_peer_change=None, on_log=None):
+                 on_state=None, on_peer_change=None, on_timesync=None,
+                 on_log=None, timesync_log_path=None):
         self.token = token
         self.port  = port
         self._on_state         = on_state         or (lambda *a, **kw: None)
         self._on_peer_change   = on_peer_change   or (lambda *a, **kw: None)
+        self._on_timesync      = on_timesync      or (lambda *a, **kw: None)
         self._on_log           = on_log           or (lambda *a, **kw: None)
+        self._timesync_log_path = timesync_log_path or timesync.timesync_log_path()
 
         self._server_socket = None
         self._peer_socket   = None
         self._peer_address  = None
         self._last_state    = None
+        self._ts_pending    = None   # (t1, t2, t3) between TIME and TIMESYNC
         self._lock          = threading.Lock()
         self.running        = False
 
@@ -135,6 +142,7 @@ class TriggerReceiver:
             # New connection -> reset state-tracking so the first STATE
             # received counts as a transition (forces a keystroke).
             self._last_state = None
+            self._ts_pending = None
         if old is not None:
             self._on_log("Replacing previous Mac connection")
             _close(old)
@@ -150,10 +158,12 @@ class TriggerReceiver:
                 data = sock.recv(1024)
                 if not data:
                     break
+                recv_time = time.time()   # for time-sync: when this data landed
                 buf += data
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    self._handle_line(line.decode("utf-8", errors="replace").strip())
+                    self._handle_line(sock, line.decode("utf-8", errors="replace").strip(),
+                                      recv_time)
         except OSError as exc:
             self._on_log(f"Read error: {exc}")
         finally:
@@ -163,14 +173,21 @@ class TriggerReceiver:
                     self._peer_socket  = None
                     self._peer_address = None
                     self._last_state   = None
+                    self._ts_pending   = None
             if still_current:
                 self._on_log("Mac disconnected")
                 self._on_peer_change(False, None)
             try: sock.close()
             except OSError: pass
 
-    def _handle_line(self, line):
+    def _handle_line(self, sock, line, recv_time):
         if not line:
+            return
+        if line.startswith(proto.PREFIX_TIME):
+            self._handle_time(sock, line, recv_time)
+            return
+        if line.startswith(proto.PREFIX_TIMESYNC):
+            self._handle_timesync(sock, line)
             return
         if not line.startswith(proto.PREFIX_STATE):
             self._on_log(f"Unknown message: {line!r}")
@@ -183,6 +200,59 @@ class TriggerReceiver:
             is_change = (state != self._last_state)
             self._last_state = state
         self._on_state(state, is_change)
+
+    # ── time-sync ─────────────────────────────────────────────────────────────
+
+    def _handle_time(self, sock, line, recv_time):
+        """Mac sent TIME:<t1>. Record t1/t2/t3 and reply TIMEACK:<t2> <t3>.
+        TIMEACK also serves as the 'timestamp received' notification."""
+        try:
+            (t1,) = proto.parse_floats_after(line, proto.PREFIX_TIME, 1)
+        except ValueError:
+            self._on_log(f"Bad TIME line: {line!r}")
+            return
+        t2 = recv_time
+        t3 = time.time()
+        with self._lock:
+            self._ts_pending = (t1, t2, t3)
+        try:
+            sock.sendall(proto.make_timeack(t2, t3))
+        except OSError as exc:
+            self._on_log(f"Time-sync: TIMEACK send failed: {exc}")
+            return
+        self._on_log("Time-sync: received Mac timestamp - acknowledged")
+
+    def _handle_timesync(self, sock, line):
+        """Mac sent TIMESYNC:<t1> <t4>. Compute the offset against our own
+        t2/t3, append it to the log, and reply TIMEOK:<offset> <delay>."""
+        try:
+            _t1, t4 = proto.parse_floats_after(line, proto.PREFIX_TIMESYNC, 2)
+        except ValueError:
+            self._on_log(f"Bad TIMESYNC line: {line!r}")
+            return
+        with self._lock:
+            pending = self._ts_pending
+            self._ts_pending = None
+            peer = self._peer_address
+        if pending is None:
+            self._on_log("Time-sync: TIMESYNC with no prior TIME — ignored")
+            return
+        t1, t2, t3 = pending
+        offset, delay = timesync.compute_offset(t1, t2, t3, t4)
+        peer_str = f"{peer[0]}:{peer[1]}" if peer else "?"
+        try:
+            path = timesync.append_log(offset, delay, t1, t2, t3, t4, peer_str,
+                                       self._timesync_log_path)
+            self._on_log(
+                f"Time-sync: delta = {offset:+.6f} s (Windows - Mac), "
+                f"rtt {delay * 1000.0:.2f} ms - logged to {path}")
+        except OSError as exc:
+            self._on_log(f"Time-sync: log write failed: {exc}")
+        try:
+            sock.sendall(proto.make_timeok(offset, delay))
+        except OSError as exc:
+            self._on_log(f"Time-sync: TIMEOK send failed: {exc}")
+        self._on_timesync(offset, delay, peer_str)
 
 
 def _close(sock):

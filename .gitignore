@@ -51,6 +51,9 @@ windows_token.txt
 *.token
 config.json
 
+# Time-sync log written by the Windows receiver (per-install runtime data).
+time_sync_log.txt
+
 # ─── Subject / session data ────────────────────────────────────────────────
 # Brainsight session exports can contain subject identifiers and are large.
 # Keep them in the lab's secure data store, not in git.
