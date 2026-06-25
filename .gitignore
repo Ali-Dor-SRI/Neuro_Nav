@@ -63,6 +63,11 @@ data/
 # Keep small sample files for testing if needed:
 !data/.gitkeep
 
+# ─── Analysis outputs ──────────────────────────────────────────────────────
+# data_analysis/ holds version-controlled R scripts; the plots they emit are
+# regenerable, so keep the images out of git.
+data_analysis/*.png
+
 # ─── Build artifacts ───────────────────────────────────────────────────────
 *.log
 *.tmp
