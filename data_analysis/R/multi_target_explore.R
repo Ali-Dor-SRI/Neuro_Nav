@@ -1,9 +1,9 @@
 library(tidyverse)
 library(plotly)
 
-source("R/parse_brainsight.R")
+source("Y:/Neuro_Nav_App/data_analysis/R/parse_brainsight.R")
 
-tables <- parse_brainsight("data/Session 6_ Streamed Info.txt")
+tables <- parse_brainsight("Y:/Neuro_Nav_App/data/Session 6_ Streamed Info.txt")
 
 
 df_targets <- tables[["Target Selection"]]

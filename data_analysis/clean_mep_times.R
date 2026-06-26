@@ -21,21 +21,24 @@
 # =====================================================================
 
 # ---- CONFIG (edit per session) --------------------------------------
-XLSX_PATH        <- "Y:/Merged Data/xlsx Data/SNBR-169-MT-FU1-TP3C60625B.xlsx"
-QLG_PATH         <- "Y:/Merged Data/Data/TP3C60625B.QLG"
+# Each injectable input uses `if (!exists())` so a parent orchestrator
+# (run_analysis.R) can set it first; edit the default after the `<-` for
+# standalone runs.
+if (!exists("XLSX_PATH"))   XLSX_PATH <- "Y:/Merged Data/xlsx Data/SNBR-169-MT-FU1-TP3C60625B.xlsx"
+if (!exists("QLG_PATH"))    QLG_PATH  <- "Y:/Merged Data/Data/TP3C60625B.QLG"
 
 # Filter window on the .xlsx "elapsed time" column (UNITS: minutes, inclusive).
-WINDOW_LOW       <- 36.69168472   # keep MEPs with elapsed >= this
-WINDOW_HIGH      <- 43.96465302   # keep MEPs with elapsed <= this
+if (!exists("WINDOW_LOW"))  WINDOW_LOW  <- 36.69168472   # keep MEPs elapsed >= this
+if (!exists("WINDOW_HIGH")) WINDOW_HIGH <- 43.96465302   # keep MEPs elapsed <= this
 
 # Clock-sync correction subtracted from the actual time (UNITS: seconds).
 # Positive = the recorded clock runs ahead, so we shift timestamps earlier.
-CLOCK_OFFSET_SEC <- 0.837211
+if (!exists("CLOCK_OFFSET_SEC")) CLOCK_OFFSET_SEC <- 0.837211
 
 # Session calendar date for the wall-clock anchor. The .QLG row-1 line only
 # carries a time-of-day (no date); leave as NA to use the .QLG file's own
 # modified-date, or hard-code "YYYY-MM-DD" to override.
-SESSION_DATE     <- NA
+if (!exists("SESSION_DATE")) SESSION_DATE <- NA
 
 # Sheet + column layout of the QtracP export.
 XLSX_SHEET       <- "P"   # sheet holding elapsed time + peak-to-peak
@@ -49,8 +52,8 @@ LAT_COL          <- 2     # col 2 = MEP latency, Chan 1 (UNITS: milliseconds)
 
 TZ               <- "America/Toronto"   # wall-clock zone for all timestamps
 
-# Where to drop the QC scatter plot for this stage.
-PLOT_PATH        <- "Y:/Neuro_Nav_App/data_analysis/mep_scatter.png"
+# Where to drop the QC scatter plot for this stage (standalone runs only).
+if (!exists("PLOT_PATH")) PLOT_PATH <- "Y:/Neuro_Nav_App/data_analysis/mep_scatter.png"
 # ---------------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -130,21 +133,23 @@ message(sprintf("MEPs kept          : %d of %d", nrow(mep_clean), nrow(mep)))
 message(sprintf("Latency (ms)       : %.1f-%.1f  (mean %.1f)",
                 min(mep_clean$latency_ms), max(mep_clean$latency_ms),
                 mean(mep_clean$latency_ms)))
-print(head(mep_clean, 10L))
 
 # ---- 5. QC deliverable: scatter (time x, peak-to-peak y) ------------
-qc_plot <- ggplot(mep_clean, aes(x = corrected_time, y = ptp)) +
-  geom_point(size = 2, alpha = 0.8, colour = "#2c7fb8") +
-  scale_x_datetime(date_labels = "%H:%M:%OS1") +
-  labs(
-    title    = "MEP peak-to-peak vs. clock-corrected time",
-    subtitle = sprintf("%d MEPs  |  elapsed %.3f-%.3f min  |  offset -%.3f s",
-                        nrow(mep_clean), WINDOW_LOW, WINDOW_HIGH, CLOCK_OFFSET_SEC),
-    x = "Corrected wall-clock time", y = "Peak-to-peak amplitude (mV)"
-  ) +
-  theme_minimal(base_size = 12)
-
-ggsave(PLOT_PATH, qc_plot, width = 9, height = 5, dpi = 150)
-message(sprintf("QC scatter written : %s", PLOT_PATH))
+# Standalone only -- under run_analysis.R the orchestrator owns the plots.
+if (!exists("ORCHESTRATED")) {
+  print(head(mep_clean, 10L))
+  qc_plot <- ggplot(mep_clean, aes(x = corrected_time, y = ptp)) +
+    geom_point(size = 2, alpha = 0.8, colour = "#2c7fb8") +
+    scale_x_datetime(date_labels = "%H:%M:%OS1") +
+    labs(
+      title    = "MEP peak-to-peak vs. clock-corrected time",
+      subtitle = sprintf("%d MEPs  |  elapsed %.3f-%.3f min  |  offset -%.3f s",
+                          nrow(mep_clean), WINDOW_LOW, WINDOW_HIGH, CLOCK_OFFSET_SEC),
+      x = "Corrected wall-clock time", y = "Peak-to-peak amplitude (mV)"
+    ) +
+    theme_minimal(base_size = 12)
+  ggsave(PLOT_PATH, qc_plot, width = 9, height = 5, dpi = 150)
+  message(sprintf("QC scatter written : %s", PLOT_PATH))
+}
 
 # `mep_clean` is left in the R session for the next stage (no data export).

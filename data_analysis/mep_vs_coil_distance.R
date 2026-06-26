@@ -19,18 +19,19 @@
 # =====================================================================
 
 # ---- CONFIG ---------------------------------------------------------
-SCRIPT_MEP  <- "Y:/Neuro_Nav_App/data_analysis/clean_mep_times.R"
-SCRIPT_COIL <- "Y:/Neuro_Nav_App/data_analysis/coil_to_sample_delta.R"
+# Injectable via `if (!exists())` so run_analysis.R can drive this stage.
+if (!exists("SCRIPT_MEP"))  SCRIPT_MEP  <- "Y:/Neuro_Nav_App/data_analysis/clean_mep_times.R"
+if (!exists("SCRIPT_COIL")) SCRIPT_COIL <- "Y:/Neuro_Nav_App/data_analysis/coil_to_sample_delta.R"
 
-PLOT_TRANS_PATH <- "Y:/Neuro_Nav_App/data_analysis/logmep_vs_trans.png"
-PLOT_ANG_PATH   <- "Y:/Neuro_Nav_App/data_analysis/logmep_vs_ang.png"
+if (!exists("PLOT_TRANS_PATH")) PLOT_TRANS_PATH <- "Y:/Neuro_Nav_App/data_analysis/logmep_vs_trans.png"
+if (!exists("PLOT_ANG_PATH"))   PLOT_ANG_PATH   <- "Y:/Neuro_Nav_App/data_analysis/logmep_vs_ang.png"
 
 # Largest acceptable gap (s) between a trigger time and its nearest coil frame.
 # Triggers matched beyond this are flagged (tracker dropout / clock mismatch).
-MAX_MATCH_GAP_S <- 0.10
+if (!exists("MAX_MATCH_GAP_S")) MAX_MATCH_GAP_S <- 0.10
 
 # Fit the linear models? (LOESS plots reviewed -> fitting on the clean set.)
-FIT_MODELS      <- TRUE
+if (!exists("FIT_MODELS")) FIT_MODELS <- TRUE
 # ---------------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -61,6 +62,7 @@ analysis_all <- tibble(
   trigger_time  = trig$trigger_time,
   mep           = trig$ptp,
   log_mep       = log(trig$ptp),          # MEP ptp is ~lognormal -> log it
+  coil          = coil_dist$coil[near_idx],   # coil active at the trigger
   trans_dist_mm = coil_dist$trans_dist_mm[near_idx],
   ang_dist_deg  = coil_dist$ang_dist_deg[near_idx],
   match_gap_s   = match_gap_s
@@ -78,6 +80,8 @@ message(sprintf("Kept (gap <= %.2fs): %d  |  dropped (no valid coil pose): %d",
                 MAX_MATCH_GAP_S, nrow(analysis), n_bad))
 
 # ---- 4. scatter + LOESS (no straight line -- don't prejudge shape) --
+# Standalone only -- under run_analysis.R the orchestrator owns the plots/CSV.
+if (!exists("ORCHESTRATED")) {
 p_trans <- ggplot(analysis, aes(x = trans_dist_mm, y = log_mep)) +
   geom_point(size = 2, alpha = 0.75, colour = "#2c7fb8") +
   geom_smooth(method = "loess", se = TRUE, colour = "#d95f0e", fill = "#fec44f") +
@@ -117,5 +121,7 @@ if (isTRUE(FIT_MODELS)) {
   report_lm(m_trans, "translational (mm)")
   report_lm(m_ang,   "angular (deg)")
 }
+
+}  # end if(!exists("ORCHESTRATED"))
 
 # `analysis` is left in the session for the next stage.

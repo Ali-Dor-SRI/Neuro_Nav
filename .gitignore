@@ -64,9 +64,10 @@ data/
 !data/.gitkeep
 
 # ─── Analysis outputs ──────────────────────────────────────────────────────
-# data_analysis/ holds version-controlled R scripts; the plots they emit are
-# regenerable, so keep the images out of git.
+# data_analysis/ holds version-controlled R scripts; the plots they emit and the
+# per-participant run outputs are regenerable / contain data, so keep them out.
 data_analysis/*.png
+data_analysis/output/
 
 # ─── Build artifacts ───────────────────────────────────────────────────────
 *.log

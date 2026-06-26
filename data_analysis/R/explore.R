@@ -13,7 +13,7 @@ schemas <- list(
 )
 
 lines <- readLines(
-  "data/Session 3  Streamed Info.txt")
+  "Y:/Neuro_Nav_App/data/Session 3  Streamed Info.txt")
 data_lines <- lines[!startsWith(lines, "#") & nzchar(lines)]
 
 parse_rows <- function(row_type) {
