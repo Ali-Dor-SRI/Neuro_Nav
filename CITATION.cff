@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, its models, or its results, please cite it as below."
+title: "Neuro_Nav: Real-time Brainsight TMS neuronavigation monitoring and cross-platform trigger pipeline"
+abstract: >-
+  Neuro_Nav is a research toolkit for transcranial magnetic stimulation (TMS)
+  sessions guided by Brainsight neuronavigation. It provides real-time monitoring
+  and visualization of coil-placement drift, a cross-platform Mac-to-Windows
+  trigger pipeline that gates TMS stimulation on coil accuracy, and an offline R
+  pipeline that correlates motor evoked potential (MEP) amplitude with the coil's
+  distance and angle from its target.
+type: software
+authors:
+  - family-names: Doroodchi
+    given-names: Ali
+    affiliation: "ALS Neurophysiology and Neuromodulation Lab"
+version: "0.1.0"
+date-released: "2026-07-08"
+license: PolyForm-Noncommercial-1.0.0
+repository-code: "https://github.com/Ali-Dor-SRI/Neuro_Nav"
+url: "https://github.com/Ali-Dor-SRI/Neuro_Nav"
+keywords:
+  - transcranial magnetic stimulation
+  - TMS
+  - neuronavigation
+  - Brainsight
+  - motor evoked potential
+  - MEP
+  - neurophysiology
+  - real-time monitoring

@@ -133,3 +133,23 @@ Mirrored to two GitHub accounts:
 - `tms_token.json` (and legacy `tms_token.txt`/`windows_token.txt`),
   `config.json` — the per-install 4-digit shared-secret token and the Mac's
   saved connection details. Generated per-install; must never be committed.
+
+---
+
+## License
+
+Released under the [PolyForm Noncommercial License 1.0.0](LICENSE): free to use,
+modify, and redistribute **for noncommercial purposes** — research, teaching, personal
+study, and use by academic, nonprofit, public-research, and government organizations
+(regardless of funding source) — provided the copyright and license notices are kept
+intact. **Commercial use is not granted by this license.**
+
+Copyright (c) 2026 Ali Doroodchi, ALS Neurophysiology and Neuromodulation Lab
+
+---
+
+## Citation
+
+If you use this software or its results in academic work, please cite it. GitHub's
+**"Cite this repository"** sidebar (from [`CITATION.cff`](CITATION.cff)) exports APA
+and BibTeX entries.
