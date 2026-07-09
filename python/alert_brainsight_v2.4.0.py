@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
-alert_brainsight_v2.3.0.py
+alert_brainsight_v2.4.0.py
 --------------------------
-Real-time Brainsight drift monitor - version 2.3.0.
+Real-time Brainsight drift monitor - version 2.4.0.
+
+Adds (v2.3.0 -> v2.4.0):
+  - TMS triggering toggle. Sending of STATE:RED / STATE:GREEN triggers (which
+    drive the `ss` start/stop keystrokes on the Windows receiver) can now be
+    switched off without dropping the link. With triggering OFF the monitor
+    still connects, time-syncs, and reports drift in the terminal - it just
+    never sends a trigger. Lets the operator run the app for time-sync +
+    distance monitoring only. Enabled by default (current behavior).
+      * `--no-triggers` starts with triggering OFF.
+      * `set trigger on|off` toggles it live.
+      * Pure gate: toggling never itself sends a trigger; on re-enable, the
+        next in/out-of-range transition fires normally.
 
 Adds (v2.2.0 -> v2.3.0):
   - Auto-follow target selection. The active (tracked) target now follows
@@ -29,20 +41,25 @@ Carried over from v2.2.0:
 Usage
 -----
     # Terminal-only (no trigger), auto-follow on:
-    python3 alert_brainsight_v2.3.0.py "path/to/Streamed Info.txt"
+    python3 alert_brainsight_v2.4.0.py "path/to/Streamed Info.txt"
 
     # Pin a target manually instead of following the file:
-    python3 alert_brainsight_v2.3.0.py "path/to/Streamed Info.txt" --no-follow
+    python3 alert_brainsight_v2.4.0.py "path/to/Streamed Info.txt" --no-follow
 
     # With trigger to Windows receiver:
-    python3 alert_brainsight_v2.3.0.py "path/to/Streamed Info.txt" \\
+    python3 alert_brainsight_v2.4.0.py "path/to/Streamed Info.txt" \\
         --trigger-to 192.168.1.20:5050 --token 1234
+
+    # Connected for time-sync + distance monitoring, but no SS triggers:
+    python3 alert_brainsight_v2.4.0.py "path/to/Streamed Info.txt" \\
+        --trigger-to 192.168.1.20:5050 --token 1234 --no-triggers
 
 Terminal commands while running:
     list                          show available targets and drivers
     set target <n|name>           pin active target (turns auto-follow OFF)
     set driver <n|name>           switch active driver (resets alert state)
     set follow on|off             toggle auto-follow of the file's selection
+    set trigger on|off            toggle sending SS triggers to Windows/QTrack
     set loc <mm>                  scalar linear threshold (all 3 axes)
     set loc <x> <y> <z>           per-axis linear thresholds (mm)
     set ang <rad>                 scalar angular threshold (all 3 axes)
@@ -63,7 +80,7 @@ from datetime import datetime
 
 # ── Version & constants ────────────────────────────────────────────────────────
 
-SCRIPT_VERSION   = "v2.3.0"
+SCRIPT_VERSION   = "v2.4.0"
 
 POLL_HZ          = 2
 POLL_INTERVAL    = 1 / POLL_HZ
@@ -116,6 +133,11 @@ all_drivers = []
 # Target Selection (MNI) row in the file. A manual `set target` turns it off.
 auto_follow        = True
 last_selected_name = None      # most-recent file selection seen
+
+# TMS triggering gate: when False, STATE:RED/GREEN are not sent (no `ss`
+# keystrokes reach QTrack). The link, time-sync, and drift reporting all
+# continue. Pure gate - toggling never itself sends a trigger. Default ON.
+triggers_enabled   = True
 
 reset_requested = False
 
@@ -460,6 +482,7 @@ def input_thread():
     global thr_loc, thr_ang, remind_every
     global active_target_name, active_target, active_driver_name
     global auto_follow, last_selected_name
+    global triggers_enabled
     global reset_requested
 
     help_text = (
@@ -468,6 +491,7 @@ def input_thread():
         "    set target <n|name>           pin active target (turns follow OFF)\n"
         "    set driver <n|name>           switch driver (resets alert state)\n"
         "    set follow on|off             toggle auto-follow of file selection\n"
+        "    set trigger on|off            toggle SS triggers to Windows/QTrack\n"
         "    set loc <mm>                  scalar linear threshold (all 3 axes)\n"
         "    set loc <x> <y> <z>           per-axis linear thresholds (mm)\n"
         "    set ang <rad>                 scalar angular threshold (all 3 axes)\n"
@@ -503,6 +527,7 @@ def input_thread():
                     link = ("connected" if trigger_sender.is_connected()
                             else "disconnected")
                 follow_str = "on" if auto_follow else "off"
+                trig_str = "on" if triggers_enabled else "OFF (monitoring only)"
                 print(
                     f"  [status]\n"
                     f"    target  : {active_target_name}\n"
@@ -512,6 +537,7 @@ def input_thread():
                     f"    ang thr : {fmt_thr(thr_ang, 'rad')}\n"
                     f"    remind  : every {remind_every} checks\n"
                     f"    trigger : {link}\n"
+                    f"    SS keys : {trig_str}\n"
                 )
 
         elif cmd in ("help", "?"):
@@ -569,6 +595,21 @@ def input_thread():
                     print("  [set]  auto-follow OFF - target pinned manually")
                 else:
                     print("  [!] usage: set follow on|off")
+
+            elif key in ("trigger", "triggers"):
+                v = val_str.strip().lower()
+                if v in ("on", "true", "1", "yes"):
+                    with lock:
+                        triggers_enabled = True
+                    print("  [set]  TMS triggering ON - sending SS start/stop "
+                          "to QTrack on drift transitions")
+                elif v in ("off", "false", "0", "no"):
+                    with lock:
+                        triggers_enabled = False
+                    print("  [set]  TMS triggering OFF - monitoring + time-sync "
+                          "only; no SS sent to QTrack")
+                else:
+                    print("  [!] usage: set trigger on|off")
 
             elif key == "loc":
                 vec = _parse_threshold_vec(value_toks, "loc")
@@ -771,6 +812,7 @@ def monitor_loop(filepath):
             cur_ang    = list(thr_ang)
             cur_rem    = remind_every
             cur_driver = active_driver_name
+            cur_triggers = triggers_enabled
 
         if cur_target is None or cur_driver is None or last_pointer is None:
             now = time.monotonic()
@@ -808,7 +850,7 @@ def monitor_loop(filepath):
                     in_exceedance = True
                     checks_over   = 1
                     # Trigger transition: in-range -> out-of-range
-                    if trigger_sender is not None:
+                    if trigger_sender is not None and cur_triggers:
                         trigger_sender.send_state(STATE_RED)
                 else:
                     checks_over += 1
@@ -822,7 +864,7 @@ def monitor_loop(filepath):
                           f"loc=({d_xyz[0]:.1f}, {d_xyz[1]:.1f}, {d_xyz[2]:.1f}) mm  "
                           f"ang=({t_xyz[0]:.3f}, {t_xyz[1]:.3f}, {t_xyz[2]:.3f}) rad")
                     # Trigger transition: out -> in-range
-                    if trigger_sender is not None:
+                    if trigger_sender is not None and cur_triggers:
                         trigger_sender.send_state(STATE_GREEN)
                 in_exceedance = False
                 checks_over   = 0
@@ -851,6 +893,7 @@ def main():
     global thr_loc, thr_ang
     global active_target_name, active_target, active_driver_name
     global auto_follow, last_selected_name
+    global triggers_enabled
     global trigger_sender
 
     parser = argparse.ArgumentParser(
@@ -869,6 +912,13 @@ def main():
                              "and keep it pinned (classic v2.2.0 behavior). "
                              "Auto-follow is ON by default.")
     parser.set_defaults(follow=True)
+    parser.add_argument("--no-triggers", dest="triggers", action="store_false",
+                        help="Start with TMS triggering OFF: still connect, "
+                             "time-sync, and monitor drift, but do NOT send "
+                             "STATE:RED/GREEN (no SS keystrokes reach QTrack). "
+                             "Toggle live with 'set trigger on|off'. Triggering "
+                             "is ON by default.")
+    parser.set_defaults(triggers=True)
     parser.add_argument("--trigger-to", default=None, metavar="HOST:PORT",
                         help="Send STATE: triggers to a Windows receiver at HOST:PORT. "
                              "If omitted, alerts are terminal-only.")
@@ -881,6 +931,7 @@ def main():
         thr_loc = [args.loc] * 3
         thr_ang = [args.ang] * 3
         auto_follow = args.follow
+        triggers_enabled = args.triggers
 
     filepath = args.file
 
@@ -890,6 +941,7 @@ def main():
     print(f"  loc thr    : {fmt_thr(thr_loc, 'mm', '{:.1f}')}")
     print(f"  ang thr    : {fmt_thr(thr_ang, 'rad')}")
     print(f"  Auto-follow: {'on' if args.follow else 'off'}")
+    print(f"  Triggering : {'on' if args.triggers else 'OFF (monitoring only)'}")
 
     # ── Trigger sender (optional) ────────────────────────────────────────────
     # Establish the trigger link FIRST, before looking for the Brainsight
@@ -973,7 +1025,10 @@ def main():
     print(f"    ang thr : {fmt_thr(thr_ang, 'rad')}")
     print(f"    Remind  : every {remind_every} checks (~{remind_every/POLL_HZ:.0f} s)")
     if trigger_sender is not None:
-        print(f"    Trigger : sending to receiver on transitions")
+        if triggers_enabled:
+            print(f"    Trigger : sending SS to receiver on transitions")
+        else:
+            print(f"    Trigger : link up; SS triggers OFF (monitoring only)")
     print(f"    Type 'list', 'status', 'set ...', or 'quit'\n")
 
     t = threading.Thread(target=input_thread, daemon=True)

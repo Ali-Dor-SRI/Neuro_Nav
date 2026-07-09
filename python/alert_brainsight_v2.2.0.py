@@ -26,7 +26,7 @@ Usage
 
     # With trigger to Windows receiver:
     python3 alert_brainsight_v2.2.0.py "path/to/Streamed Info.txt" \\
-        --trigger-to 192.168.1.20:5050 --token abcXYZ123
+        --trigger-to 192.168.1.20:5050 --token 1234
 
 Terminal commands while running:
     list                          show available targets and drivers

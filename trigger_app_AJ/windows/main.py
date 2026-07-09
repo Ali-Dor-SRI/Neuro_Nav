@@ -7,7 +7,7 @@ Usage:
     python -m trigger_app_AJ.windows.main
     python -m trigger_app_AJ.windows.main --port 5050
     python -m trigger_app_AJ.windows.main --new-token         # force fresh token
-    python -m trigger_app_AJ.windows.main --token mySharedTok # set a specific token (persisted)
+    python -m trigger_app_AJ.windows.main --token 1234       # set a specific token (persisted)
     python -m trigger_app_AJ.windows.main --show-token        # print on-disk token and exit
     python -m trigger_app_AJ.windows.main --no-keystroke      # dry-run / debug
 """
