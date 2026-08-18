@@ -68,6 +68,15 @@ data/
 # per-participant run outputs are regenerable / contain data, so keep them out.
 data_analysis/*.png
 data_analysis/output/
+# CSV outputs carry subject IDs (in the filename) + session dates, event
+# timestamps, and MEP amplitudes. Ignore them anywhere in the tree, not just
+# under output/, so a stray export can never be committed. No .csv is tracked.
+*.csv
+
+# ─── Deprecated / preliminary scripts ──────────────────────────────────────
+# explore.R was preliminary exploration and hardcodes a real subject-derived
+# MNI target coordinate. Untracked and kept out of the repo going forward.
+data_analysis/R/explore.R
 
 # ─── Build artifacts ───────────────────────────────────────────────────────
 *.log

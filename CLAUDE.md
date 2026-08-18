@@ -24,14 +24,22 @@ Neuro_Nav/
 │   ├── alert_brainsight_v2.0.1.py
 │   ├── alert_brainsight_v2.1.0.py   per-axis thresholds
 │   ├── alert_brainsight_v2.2.0.py   + TCP trigger output to Windows receiver
-│   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target  (current)
+│   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target
+│   ├── alert_brainsight_v2.4.0.py   + TMS trigger on/off toggle  (current)
 │   └── brainsight_gui/          Tk GUI wrapping the monitor + trigger sender
 ├── R/                           R scripts — run via RStudio with Neuro_Nav.Rproj open
 │   ├── parse_brainsight.R       Shared parser library (source in other scripts)
 │   ├── explore.R                2D/3D coil trajectory visualization (Session 3)
 │   └── multi_target_explore.R  Multi-target exploration (Session 6)
+├── data_analysis/              Offline MEP-vs-coil-placement pipeline (see "Data analysis pipeline")
+│   ├── run_analysis.R          Orchestrator — set INPUTS, run
+│   ├── clean_mep_times.R       Stage 1 — MEP ptp + wall-clock trigger_time (QtracP .xlsx/.QLG)
+│   ├── coil_to_sample_delta.R  Stage 2 — coil distance/angle to target (Polaris head-rel / MNI)
+│   ├── mep_vs_coil_distance.R  Stage 3 — per-MEP nearest coil pose at trigger_time
+│   ├── R/                      parse_brainsight.R (+ explore.R, multi_target_explore.R, sync_mep_times.R)
+│   └── output/                 generated CSV + PNGs
 └── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
-    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.3.0)
+    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.4.0)
     ├── TMS_CrossPlatform_Trigger_System.md
     ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
     └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_log.txt)
@@ -91,17 +99,20 @@ python3 python/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
 Reports file size and growth every 5 s. Useful to confirm a live session
 file is being written before starting more complex tools.
 
-### Drift alert — `python/alert_brainsight_v2.3.0.py`  ← current version
+### Drift alert — `python/alert_brainsight_v2.4.0.py`  ← current version
 
 ```bash
-python3 python/alert_brainsight_v2.3.0.py "data/Session 3  Streamed Info.txt"
-python3 python/alert_brainsight_v2.3.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+python3 python/alert_brainsight_v2.4.0.py "data/Session 3  Streamed Info.txt"
+python3 python/alert_brainsight_v2.4.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
 
 # Send STATE:RED / STATE:GREEN triggers to the Windows receiver on transitions:
-python3 python/alert_brainsight_v2.3.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+python3 python/alert_brainsight_v2.4.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+
+# Connected for time-sync + distance monitoring, but NO SS triggers to QTrack:
+python3 python/alert_brainsight_v2.4.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
 
 # Pin a target manually instead of auto-following the file:
-python3 python/alert_brainsight_v2.3.0.py "<file>" --no-follow
+python3 python/alert_brainsight_v2.4.0.py "<file>" --no-follow
 ```
 
 **Startup flow:**
@@ -121,6 +132,16 @@ Selection>` / `(null)` rows are ignored (last real target keeps tracking).
 A manual `set target` **pins** a target and turns follow off; `set follow on`
 resumes. Default ON; start with `--no-follow` for the classic pinned mode.
 
+**TMS triggering toggle** (v2.4.0): sending of the `STATE:RED/GREEN` triggers —
+which drive the `ss` start/stop keystrokes on the Windows receiver — can be
+switched off independently of the link. With triggering **off**, the monitor
+still connects, time-syncs, and reports drift, but sends no trigger: i.e.
+time-sync + distance monitoring only. It's a **pure gate** — toggling never
+itself sends a trigger, so QTrack's stimulation state is left untouched at the
+instant you flip it; on re-enable, the next in/out-of-range transition fires
+normally. Default ON (current behavior); start with `--no-triggers` for
+monitoring-only, or toggle live with `set trigger on|off`.
+
 **Default thresholds:**
 
 | Parameter | Default | Meaning                          |
@@ -138,12 +159,13 @@ list                  show available targets and drivers (+ follow state)
 set target <n|name>   pin active target (turns auto-follow OFF; resets alert state)
 set driver <n|name>   switch active driver (resets alert state)
 set follow on|off     toggle auto-follow of the file's target selection
+set trigger on|off    enable/disable sending SS triggers (monitoring-only when off)
 set loc <mm>          linear threshold — scalar (all axes)
 set loc <x> <y> <z>   linear threshold — per-axis
 set ang <rad>         angular threshold — scalar (all axes)
 set ang <x> <y> <z>   angular threshold — per-axis
 set remind <n>        reminder every N checks (default 100, ~50 s)
-status                print current settings (incl. follow + trigger link)
+status                print current settings (incl. follow, trigger link + SS on/off)
 quit                  stop
 ```
 
@@ -152,14 +174,18 @@ alert and reminder messages fire immediately.
 
 ### Mac GUI — `python/brainsight_gui/` (`python -m brainsight_gui`)
 
-Tk wrapper around the v2.3.0 monitor + trigger sender. Two-step wizard:
+Tk wrapper around the v2.4.0 monitor + trigger sender. Two-step wizard:
 **Setup** (file path, Windows IP/port/token, Connect & Start) →  **Perform**
 (driver + target dropdowns, per-axis threshold sliders, scrolling log).
 The backend is `monitor_worker.MonitorWorker` (mirrors the CLI logic with
 callbacks instead of `print`/REPL). Auto-follow is exposed as the
 "Auto-follow target selected in the Brainsight file" checkbox; picking from
-the Target dropdown pins a target and unchecks it. `launch_gui.command`
-double-click-launches it on the Mac.
+the Target dropdown pins a target and unchecks it. The **"Send TMS triggers
+(SS start/stop to QTrack)"** switch in the Perform panel gates triggering (same
+pure-gate semantics as the CLI's `set trigger`): unchecked keeps the link up
+for time-sync + distance monitoring but sends no `ss` to QTrack. Defaults ON
+each launch (not persisted). `launch_gui.command` double-click-launches it on
+the Mac.
 
 `brainsight_gui/config_store.py` persists the Windows IP, port, and token to
 `~/Library/Application Support/Neuro_Nav/config.json` after a successful
@@ -247,14 +273,86 @@ work in progress.
 
 ---
 
+## Data analysis pipeline (`data_analysis/`)
+
+Offline **MEP-vs-coil-placement** analysis: correlate TMS MEP amplitude
+(QtracP) with how far/tilted the coil was from its target (Brainsight
+neuronav). Entry point is **`data_analysis/run_analysis.R`** — set its INPUTS
+block and run. It drives three stages, reusing their math:
+
+| Stage script              | Builds       | Role                                                        |
+|---------------------------|--------------|-------------------------------------------------------------|
+| `clean_mep_times.R`       | `mep_clean`  | MEP peak-to-peak + wall-clock `trigger_time` from the QtracP `.xlsx` (`.QLG` launch anchor, clock-offset, latency) |
+| `coil_to_sample_delta.R`  | `coil_dist`  | coil translational/angular distance to the target over time |
+| `mep_vs_coil_distance.R`  | `analysis`   | per-MEP: nearest coil pose at each `trigger_time`           |
+
+Outputs to `data_analysis/output/`: a stats-ready CSV (one row per MEP:
+`delta_distance_mm`, `delta_angle_deg`, `mep_ptp`) + three PNGs (MEP vs time,
+log(MEP) vs distance, log(MEP) vs angle).
+
+### Coordinate frame & target (set in `run_analysis.R`, resolved in `coil_to_sample_delta.R`)
+
+Two switches control what the coil is measured against. **Defaults are the
+current workflow**; the legacy MNI/Target-Selection path is kept selectable.
+
+**`COORD_SYSTEM`** — the frame every pose lives in:
+- `"Polaris"` *(default)* — the coil is a raw optical tracker (**LCT650** *or*
+  **CT4661**, auto-detected — no need to specify) expressed **relative to the
+  head tracker (ST893)**:
+  `p_rel = Rₕₑₐd⁻¹·(p_coil − p_head)`, `R_rel = Rₕₑₐd⁻¹·R_coil`.
+  Head-motion-corrected like MNI but without the anatomical warp. Only raw
+  `Polaris Tool` rows carry Polaris data (samples/targets/crosshairs are
+  MNI-only), and a frame needs **both** the coil and head trackers visible
+  (paired by `frame_number`). If the session **swaps coils** (LCT650 and CT4661
+  tracked in disjoint time blocks), both are kept and each frame is tagged with
+  its coil. `COIL_NAME` (default `"auto"`) pins one coil if ever needed;
+  `HEAD_RELATIVE = FALSE` keeps the raw camera frame.
+- `"MNI"` *(legacy)* — the navigated `Crosshairs Position` (`Coil B LCT` /
+  `Coil A CT`) in MNI, as the earlier pipeline did.
+
+**`TARGET_MODE`** — how the reference target is defined:
+- `"sample_average"` *(default)* — the target is the **average coil pose over
+  `N_SAMPLES_AVG` (=5) consecutive `Polaris Tool` tracker frames** (the raw
+  20 Hz coil samples), starting at and **including** the frame `SAMPLE_START`.
+  `SAMPLE_START` accepts (in priority order) a **New Sample / Target Selection
+  name** (e.g. `"Sample 1"` → that event's timestamp), a timestamp
+  (`"12:21:13.545"` → first frame at/after it), or a Polaris Tool `frame_number`
+  (`"145929606"`). Position = arithmetic mean;
+  orientation = chordal **SVD rotation mean**. Averaging ~5 consecutive ~50 ms
+  samples yields a jitter-reduced target pose at the chosen instant; the frames
+  come straight from the (head-relative) coil stream. Fewer than 5 available ⇒
+  uses those and warns. **On a coil swap, each coil block gets its OWN target**
+  (the two coils' raw trackers aren't directly comparable): the block containing
+  `SAMPLE_START` is averaged from there; every other coil block auto-uses the
+  first `N_SAMPLES_AVG` frames of its own segment. Each coil's over-time frames
+  are then measured against that coil's target, and outputs carry a `coil` column.
+- `"target_selection"` *(legacy)* — looks the target up directly from the
+  `Target Selection` row named `SAMPLE_NAME` (MNI only; single target, all coils).
+
+Legacy combo: `COORD_SYSTEM="MNI"` + `TARGET_MODE="target_selection"` +
+`SAMPLE_NAME="Sample 5"`. (`Polaris` + `target_selection` is rejected — Target
+Selection rows have no Polaris pose.)
+
+**Physical note:** in Polaris/head-relative mode "coil position" is the coil
+tracker's marker array (LCT650 or CT4661) on the **coil body** relative to the
+head — a coil-placement repeatability measure — *not* the crosshairs aim-point
+on the cortex (that point is MNI-only, unavailable in Polaris). Because LCT650
+and CT4661 are different arrays on different coils, they are compared only
+**within** a coil (each vs its own target), never across the swap.
+
+Extra R deps beyond the list below: `readxl`, `lubridate`, `stringr`.
+`data_analysis/R/` carries its own copy of `parse_brainsight.R`.
+
+---
+
 ## Versioning convention
 
 Python monitoring/alert scripts are versioned in the filename:
 `alert_brainsight_v1.py`, `alert_brainsight_v2.py`,
-`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.3.0.py`.
+`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.4.0.py`.
 
 Keep old versions in `python/` — do not delete them. The highest version
-number is always the current one (currently **v2.3.0**). The `brainsight_gui/`
+number is always the current one (currently **v2.4.0**). The `brainsight_gui/`
 package tracks the latest CLI version's logic rather than carrying a version
 in its name.
 

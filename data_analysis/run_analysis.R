@@ -18,17 +18,31 @@
 # =====================================================================
 
 # ---- INPUTS (edit per participant / session) ------------------------
-XLSX_PATH        <- "Y:/Merged Data/xlsx Data/SNBR-169-MT-FU1-TP3C60625B.xlsx"  # QtracP MEP export
-QLG_PATH         <- "Y:/Merged Data/Data/TP3C60625B.QLG"                        # QtracS run log
-NEURONAV_PATH    <- "Y:/Neuro_Nav_App/data/SNBR-169.txt"                        # Brainsight stream
-WINDOW_LOW       <- 36.69168472    # elapsed-time window low  (minutes)
-WINDOW_HIGH      <- 43.96465302    # elapsed-time window high (minutes)
-CLOCK_OFFSET_SEC <- 0.837211       # Windows -> Mac clock offset (seconds)
-SAMPLE_NAME      <- "Sample 5"     # Target Selection name to measure distance from
+XLSX_PATH        <- "Y:/Merged Data/xlsx Data/SNBR-179-MT-FU1-TP3C60702A.xlsx"  # QtracP MEP export
+QLG_PATH         <- "Y:/Merged Data/Data/TP3C60702A.QLG"                        # QtracS run log
+NEURONAV_PATH    <- "Y:/Neuro_Nav_App/data/SNBR-179.txt"                        # Brainsight stream
+WINDOW_LOW       <- 35.5356941223145    # elapsed-time window low  (minutes)
+WINDOW_HIGH      <- 38.0820770263672    # elapsed-time window high (minutes)
+CLOCK_OFFSET_SEC <- 0.472957       # Windows -> Mac clock offset (seconds)
+
+# ---- TARGET & COORDINATE FRAME (see coil_to_sample_delta.R for details) ----
+# Default workflow: measure the coil in Polaris space, relative to the head
+# tracker (head-motion-corrected). The coil (LCT650 or CT4661) is AUTO-DETECTED;
+# if the session swaps coils, both blocks are analysed in one run, each against
+# its OWN target -- the block containing SAMPLE_START uses the 5-frame average
+# from there; every other block auto-uses its own first 5 frames.
+COORD_SYSTEM     <- "MNI"         # "Polaris" (head-relative) | "MNI" (legacy)
+TARGET_MODE      <- "sample_average"  # "sample_average" | "target_selection" (legacy)
+SAMPLE_START     <- "Sample 1"        # target anchor: New Sample/Target Selection NAME (or a timestamp / frame_number)
+N_SAMPLES_AVG    <- 5L                # consecutive coil frames to average (anchor + next N-1)
+HEAD_TRACKER     <- "ST893"           # head optical tracker (Polaris mode)
+# Coil auto-detected (LCT650/CT4661); pin with COIL_NAME <- "LCT650" if ever needed.
+# Legacy MNI/target_selection: set COORD_SYSTEM="MNI", TARGET_MODE="target_selection",
+# and SAMPLE_NAME to a Target Selection name (e.g. "Sample 5").
 
 # ---- OUTPUTS (change paths freely) ----------------------------------
 PROJECT_ROOT <- "Y:/Neuro_Nav_App"
-PARTICIPANT  <- "SNBR-169"                                  # label for output filenames
+PARTICIPANT  <- "SNBR-179"                                  # label for output filenames
 OUT_DIR      <- file.path(PROJECT_ROOT, "data_analysis", "output")
 
 OUT_CSV    <- file.path(OUT_DIR, paste0(PARTICIPANT, "_mep_coil.csv"))
@@ -84,20 +98,27 @@ p_time <- ggplot(mep_clean, aes(x = corrected_time, y = ptp)) +
        x = "MEP time (wall clock)", y = "MEP peak-to-peak (mV)") +
   theme_minimal(base_size = 12)
 
-# (b) log(MEP) vs delta distance, (c) log(MEP) vs delta angle -- LOESS, clean set
-p_dist <- ggplot(analysis, aes(x = trans_dist_mm, y = log_mep)) +
-  geom_point(size = 2, alpha = 0.75, colour = "#2c7fb8") +
-  geom_smooth(method = "loess", se = TRUE, colour = "#d95f0e", fill = "#fec44f") +
+# (b) log(MEP) vs delta distance, (c) log(MEP) vs delta angle -- LOESS, clean set.
+# Coloured/smoothed PER COIL so a coil swap shows as two series (one colour each);
+# with a single coil it is just one series.
+n_coils <- dplyr::n_distinct(analysis$coil)
+p_dist <- ggplot(analysis, aes(x = trans_dist_mm, y = log_mep, colour = coil, fill = coil)) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = "loess", se = TRUE) +
   labs(title = sprintf("%s  -  log(MEP) vs. distance from target", PARTICIPANT),
-       x = "Delta distance from target (mm)", y = "log(MEP peak-to-peak)") +
-  theme_minimal(base_size = 12)
+       x = "Delta distance from target (mm)", y = "log(MEP peak-to-peak)",
+       colour = "Coil", fill = "Coil") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = if (n_coils > 1) "top" else "none")
 
-p_angle <- ggplot(analysis, aes(x = ang_dist_deg, y = log_mep)) +
-  geom_point(size = 2, alpha = 0.75, colour = "#2c7fb8") +
-  geom_smooth(method = "loess", se = TRUE, colour = "#d95f0e", fill = "#fec44f") +
+p_angle <- ggplot(analysis, aes(x = ang_dist_deg, y = log_mep, colour = coil, fill = coil)) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = "loess", se = TRUE) +
   labs(title = sprintf("%s  -  log(MEP) vs. angle from target", PARTICIPANT),
-       x = "Delta angle from target (deg)", y = "log(MEP peak-to-peak)") +
-  theme_minimal(base_size = 12)
+       x = "Delta angle from target (deg)", y = "log(MEP peak-to-peak)",
+       colour = "Coil", fill = "Coil") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = if (n_coils > 1) "top" else "none")
 
 ggsave(PLOT_TIME,  p_time,  width = 8, height = 5, dpi = 150)
 ggsave(PLOT_DIST,  p_dist,  width = 7, height = 5, dpi = 150)
