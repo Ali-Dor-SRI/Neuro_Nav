@@ -12,7 +12,7 @@ both sides — no GUIs.
 │       Streamed Info .txt             │         │                              │
 │              │                       │         │                              │
 │              ▼                       │  TCP    │                              │
-│  alert_brainsight_v2.3.0.py  ──auth─►│ :5050   │ TMS Trigger Receiver         │
+│  alert_brainsight_v2.4.0.py  ──auth─►│ :5050   │ TMS Trigger Receiver         │
 │    (polls file at 2 Hz;              │ ──────► │   (auths Mac; listens for    │
 │     interactive REPL;                │ STATE:  │    STATE: lines; types       │
 │     sends STATE: on transitions)     │         │    "ss<Enter>" into the      │
@@ -20,7 +20,7 @@ both sides — no GUIs.
 └──────────────────────────────────────┘         └──────────────────────────────┘
 ```
 
-* Mac runs `python/alert_brainsight_v2.3.0.py` — the same drift monitor
+* Mac runs `python/alert_brainsight_v2.4.0.py` — the same drift monitor
   you've been using, plus optional `--trigger-to HOST:PORT --token TOK`
   flags that maintain a TCP connection to Windows and send `STATE:RED`
   / `STATE:GREEN` on the in/out-of-range transitions. The tracked target
@@ -33,6 +33,11 @@ both sides — no GUIs.
 * Triggers fire on **transitions only** — once when the tracker leaves
   the threshold envelope, once when it returns. Reminders do **not**
   trigger.
+* **Triggering can be switched off** (v2.4.0): `--no-triggers` at launch,
+  or `set trigger on|off` at the REPL (GUI: the "Send TMS triggers" switch),
+  suppresses the `STATE:` sends while keeping the link, time-sync, and drift
+  monitoring live — run the monitor for time-sync + distance only, no `ss`
+  to QTrack. See [Trigger semantics](#trigger-semantics).
 
 ---
 
@@ -57,11 +62,12 @@ trigger_app_AJ/
 python/
 ├── alert_brainsight_v2.1.0.py terminal-only monitor (unchanged)
 ├── alert_brainsight_v2.2.0.py monitor + integrated trigger sender
-└── alert_brainsight_v2.3.0.py + auto-follow of file's target selection ← current
+├── alert_brainsight_v2.3.0.py + auto-follow of file's target selection
+└── alert_brainsight_v2.4.0.py + TMS triggering on/off toggle ← current
 ```
 
 The Mac side does NOT depend on the `trigger_app_AJ/` package — the
-protocol constants are inlined in `alert_brainsight_v2.3.0.py` so you
+protocol constants are inlined in `alert_brainsight_v2.4.0.py` so you
 can copy that single file to the Mac and run it.
 
 ---
@@ -86,7 +92,7 @@ You'll see:
   File  : C:\...\trigger_app_AJ\tms_token.json
 
   On the Mac, run:
-    python python/alert_brainsight_v2.3.0.py <file> \
+    python python/alert_brainsight_v2.4.0.py <file> \
         --trigger-to <this-windows-ip>:5050 --token <4-digit code>
 ================================================================
 ```
@@ -111,18 +117,20 @@ CLI flags:
 
 ### On the Mac (the sender)
 
-Copy `python/alert_brainsight_v2.3.0.py` to the Mac if not already
+Copy `python/alert_brainsight_v2.4.0.py` to the Mac if not already
 there, then:
 
 ```bash
-python3 alert_brainsight_v2.3.0.py "/path/to/Streamed Info.txt" \
+python3 alert_brainsight_v2.4.0.py "/path/to/Streamed Info.txt" \
     --trigger-to 192.168.1.20:5050 \
     --token <token-from-windows>
 ```
 
 The script keeps the v2.1.0 REPL (per-axis thresholds, target/driver
-discovery) and the v2.2.0 trigger sender, and adds auto-follow of the
-file's target selection (below).
+discovery) and the v2.2.0 trigger sender, adds auto-follow of the
+file's target selection (below), and (v2.4.0) lets you gate the SS
+triggers with `--no-triggers` / `set trigger on|off` (see
+[Trigger semantics](#trigger-semantics)).
 
 `status` at the REPL shows the trigger link state:
 
@@ -135,6 +143,7 @@ file's target selection (below).
     ang thr : 0.20 rad (all axes)
     remind  : every 100 checks
     trigger : connected
+    SS keys : on
 ```
 
 ---
@@ -255,6 +264,18 @@ angular (rad) threshold for that axis. Angular DOFs use "per-axis tilt":
 the angle between the target's i-th basis vector and the pointer's
 i-th. Frame-free, no Euler convention, no gimbal lock.
 
+### Toggling triggers off (monitoring-only)
+
+`--no-triggers` at launch, or `set trigger on|off` at the REPL (GUI: the
+**"Send TMS triggers (SS start/stop to QTrack)"** switch in the Perform
+panel), gates the sends. With triggering **off** the Mac still connects,
+time-syncs, and reports drift — it just never emits `STATE:`, so no `ss`
+reaches QTrack. It's a **pure gate**: flipping it never itself sends a
+trigger, so QTrack's current stimulation state is left untouched at the
+instant you toggle; on re-enable, the next out→in / in→out transition
+fires normally. Default **on** (current behavior); the connection stays up
+either way, so time-sync still runs. `status` shows the gate as `SS keys`.
+
 ### What happens when the network drops
 
 * If the Mac can't reach the receiver when an alert fires, the send is
@@ -327,4 +348,4 @@ the 4-digit code and its weekly rotation schedule survive upgrades.
 | `build/build_windows.bat`                  | PyInstaller .exe builder                         |
 | `tms_token.json`                           | Auto-generated 4-digit token + issue time (Windows side) |
 | `requirements.txt`                         | `pyautogui` + `pyinstaller`                      |
-| `../python/alert_brainsight_v2.3.0.py`     | Mac sender (monitor + trigger output)            |
+| `../python/alert_brainsight_v2.4.0.py`     | Mac sender (monitor + trigger output)            |

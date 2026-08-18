@@ -33,6 +33,7 @@ class PerformPanel(ttk.LabelFrame):
                  on_linear_changed=None,
                  on_angular_changed=None,
                  on_follow_toggled=None,
+                 on_triggers_toggled=None,
                  on_back=None,
                  **kwargs):
         super().__init__(master, text="Module 2 — Perform", padding=10, **kwargs)
@@ -41,6 +42,7 @@ class PerformPanel(ttk.LabelFrame):
         self._on_linear_changed  = on_linear_changed  or (lambda vec: None)
         self._on_angular_changed = on_angular_changed or (lambda vec: None)
         self._on_follow_toggled  = on_follow_toggled  or (lambda enabled: None)
+        self._on_triggers_toggled= on_triggers_toggled or (lambda enabled: None)
         self._on_back            = on_back            or (lambda: None)
 
         self._enabled = False  # Setup must run before this becomes active
@@ -89,6 +91,23 @@ class PerformPanel(ttk.LabelFrame):
 
         dd_frame.columnconfigure(1, weight=1)
 
+        # ─ TMS triggering switch ─
+        # Clinically significant: when OFF, no SS start/stop keystrokes are sent
+        # to QTrack — the app only time-syncs and monitors distance. Pure gate,
+        # so flipping it never itself types into QTrack. Defaults ON.
+        trig_frame = ttk.LabelFrame(self, text="TMS triggering", padding=(8, 4))
+        trig_frame.pack(fill="x", pady=(0, 8))
+        self._triggers_var = tk.BooleanVar(value=True)
+        self._triggers_check = ttk.Checkbutton(
+            trig_frame,
+            text="Send TMS triggers (SS start/stop to QTrack)",
+            variable=self._triggers_var,
+            command=self._on_triggers_toggle)
+        self._triggers_check.pack(side="left")
+        self._triggers_status = ttk.Label(trig_frame, text="")
+        self._triggers_status.pack(side="right")
+        self._reflect_triggers_status(True)
+
         # ─ Threshold widgets (side by side) ─
         thr_frame = ttk.Frame(self); thr_frame.pack(fill="x", pady=(0, 8))
         self._linear_widget = ThresholdWidget(
@@ -128,6 +147,7 @@ class PerformPanel(ttk.LabelFrame):
         self._driver_combo.config(state=state)
         self._target_combo.config(state=state)
         self._follow_check.config(state="normal" if enabled else "disabled")
+        self._triggers_check.config(state="normal" if enabled else "disabled")
         # ThresholdWidget contains sliders and entries; toggle children
         for child in self._iter_threshold_children():
             try:
@@ -164,6 +184,24 @@ class PerformPanel(ttk.LabelFrame):
         won't loop back into the worker."""
         self._follow_var.set(bool(enabled))
 
+    def set_triggers(self, enabled):
+        """Reflect the worker's trigger-gate state in the checkbox + status
+        label. Setting the variable programmatically does NOT fire the command
+        callback, so this won't loop back into the worker."""
+        enabled = bool(enabled)
+        self._triggers_var.set(enabled)
+        self._reflect_triggers_status(enabled)
+
+    def _reflect_triggers_status(self, enabled):
+        """Update the little colored state label next to the switch."""
+        if enabled:
+            self._triggers_status.config(text="● ON — sending SS to QTrack",
+                                         foreground="#1a7f1a")
+        else:
+            self._triggers_status.config(
+                text="○ OFF — monitoring + time-sync only",
+                foreground="#b87515")
+
     def set_linear_threshold(self, vec3):
         self._linear_widget.set(vec3)
 
@@ -199,6 +237,13 @@ class PerformPanel(ttk.LabelFrame):
 
     def _on_follow_toggle(self):
         self._on_follow_toggled(self._follow_var.get())
+
+    def _on_triggers_toggle(self):
+        # Reflect immediately for snappy feedback; the worker's
+        # on_triggers_changed callback will also call set_triggers (idempotent).
+        enabled = self._triggers_var.get()
+        self._reflect_triggers_status(enabled)
+        self._on_triggers_toggled(enabled)
 
     def _on_linear(self, vec):
         if self._enabled:

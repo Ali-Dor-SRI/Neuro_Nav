@@ -67,6 +67,7 @@ class App:
             on_linear_changed = self._on_linear_changed,
             on_angular_changed= self._on_angular_changed,
             on_follow_toggled = self._on_follow_toggled,
+            on_triggers_toggled = self._on_triggers_toggled,
             on_back           = self._on_perform_back,
         )
         # Remembered connection details: prefill Setup from the last
@@ -89,6 +90,7 @@ class App:
         self.worker.on_link_state         = self._on_link_state
         self.worker.on_thresholds_changed = self._on_thresholds_changed
         self.worker.on_follow_changed     = self._on_follow_changed
+        self.worker.on_triggers_changed   = self._on_triggers_changed
 
         # Apply default thresholds to the panel
         self.perform.set_linear_threshold([DEFAULT_LOC_THR] * 3)
@@ -166,6 +168,9 @@ class App:
     def _on_follow_toggled(self, enabled):
         self.worker.set_auto_follow(enabled)
 
+    def _on_triggers_toggled(self, enabled):
+        self.worker.set_triggers_enabled(enabled)
+
     # ── Worker -> UI (already on Tk thread; ui_dispatch routed it here) ─────
 
     def _on_status_message(self, level, message):
@@ -179,6 +184,9 @@ class App:
 
     def _on_follow_changed(self, enabled):
         self.perform.set_follow(enabled)
+
+    def _on_triggers_changed(self, enabled):
+        self.perform.set_triggers(enabled)
 
     def _on_link_state(self, connected, info):
         # On the first successful auth, remember the connection details so the

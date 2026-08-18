@@ -297,6 +297,13 @@ class MonitorWorker:
         self._auto_follow        = True
         self._last_selected_name = None     # most-recent file selection seen
 
+        # TMS triggering gate: when False, STATE:RED/GREEN are NOT sent to the
+        # Windows receiver, so no SS keystrokes reach QTrack. Time-sync and
+        # distance monitoring continue regardless. Pure gate — toggling never
+        # itself sends a trigger; on re-enable, the next in↔out drift
+        # transition fires normally. Defaults ON (current behavior).
+        self._triggers_enabled   = True
+
         # Loop state
         self._reset_requested = False
         self._stop_event = threading.Event()
@@ -310,6 +317,7 @@ class MonitorWorker:
         self.on_link_state          = lambda connected, info: None
         self.on_thresholds_changed  = lambda loc, ang: None
         self.on_follow_changed      = lambda enabled: None
+        self.on_triggers_changed    = lambda enabled: None
 
     # ── Setters (call from UI thread) ────────────────────────────────────────
 
@@ -360,6 +368,18 @@ class MonitorWorker:
             self._dispatch(self.on_status_message, *M.target_followed(followed))
         self._dispatch(self.on_follow_changed, enabled)
         self._emit_targets()
+
+    def set_triggers_enabled(self, enabled):
+        """Enable/disable sending TMS triggers (STATE:RED/GREEN → SS keystrokes
+        on the Windows side). Pure gate: toggling never itself sends a trigger,
+        and internal in/out-of-range tracking, logging, and time-sync are all
+        unaffected. On re-enable, the next in↔out transition fires normally."""
+        enabled = bool(enabled)
+        with self._lock:
+            self._triggers_enabled = enabled
+        self._dispatch(self.on_status_message,
+                       *(M.triggers_enabled() if enabled else M.triggers_disabled()))
+        self._dispatch(self.on_triggers_changed, enabled)
 
     def set_driver(self, name):
         with self._lock:
@@ -492,6 +512,7 @@ class MonitorWorker:
                 cur_ang    = list(self._thr_ang)
                 cur_rem    = self._remind_every
                 cur_driver = self._active_driver_name
+                cur_triggers = self._triggers_enabled
 
             if cur_target is None or cur_driver is None or last_pointer is None:
                 now = time.monotonic()
@@ -532,7 +553,7 @@ class MonitorWorker:
                         checks_over = 1
                         self._dispatch(self.on_status_message,
                                        *M.out_of_range(reasons))
-                        if self._trigger_sender is not None:
+                        if self._trigger_sender is not None and cur_triggers:
                             self._trigger_sender.send_state(STATE_RED)
                     else:
                         checks_over += 1
@@ -545,7 +566,7 @@ class MonitorWorker:
                         in_exceedance = False
                         self._dispatch(self.on_status_message,
                                        *M.back_in_range(d_xyz, t_xyz))
-                        if self._trigger_sender is not None:
+                        if self._trigger_sender is not None and cur_triggers:
                             self._trigger_sender.send_state(STATE_GREEN)
                     else:
                         # Periodic "within threshold" heartbeat so the user

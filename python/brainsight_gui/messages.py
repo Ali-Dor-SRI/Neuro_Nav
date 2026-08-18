@@ -71,6 +71,14 @@ def follow_enabled():
 def follow_disabled():
     return INFO, "Auto-follow OFF — target pinned manually"
 
+def triggers_enabled():
+    return OK, ("TMS triggering ON — sending SS start/stop to QTrack on drift "
+                "transitions")
+
+def triggers_disabled():
+    return WARN, ("TMS triggering OFF — time-sync and distance monitoring only; "
+                  "no SS sent to QTrack")
+
 def driver_adopted(name):
     return OK, f"Crosshairs driver adopted: {name}"
 
