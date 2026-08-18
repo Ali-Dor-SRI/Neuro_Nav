@@ -205,6 +205,7 @@ machines that never shared a clock, have to be reconciled:
 | [`coil_to_sample_delta.R`](data_analysis/coil_to_sample_delta.R) | Stage 2 — builds `coil_dist` / `coil_delta`: coil pose vs target over time. The largest and most configurable script (~530 lines) |
 | [`mep_vs_coil_distance.R`](data_analysis/mep_vs_coil_distance.R) | Stage 3 — builds `analysis`: joins the two on time |
 | [`R/parse_brainsight.R`](data_analysis/R/parse_brainsight.R) | The R twin of the Python parser — same schemas, same `(null)` → `NA`, same empty-table-with-right-columns guarantee |
+| [`join_meps.R`](data_analysis/join_meps.R) | Standalone one-call join for MEPs you already have in a data frame — see "Ad-hoc joins" below |
 | [`R/sync_mep_times.R`](data_analysis/R/sync_mep_times.R) | Standalone helper, not sourced by the pipeline — see "Where the clock offset comes from" below |
 
 (`R/explore.R` and `R/multi_target_explore.R` are exploratory scratch work, not
@@ -311,6 +312,28 @@ session timestamps): one **CSV** — `trigger_time`, `coil`,
 plus **three PNGs**: MEP vs time, log(MEP) vs distance, log(MEP) vs angle. The
 two scatter plots are coloured and smoothed *per coil*, so a coil swap shows up
 as two series rather than one misleading cloud.
+
+### Ad-hoc joins
+
+When the MEPs are already in the session as a data frame rather than a QtracP
+export, [`join_meps.R`](data_analysis/join_meps.R) does the same job in one
+call:
+
+```r
+source("Y:/Neuro_Nav_App/data_analysis/join_meps.R")
+out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df)
+```
+
+`new_df` needs an elapsed-time column in decimal minutes (default `Time`),
+taken to be **the pulse itself** — no latency is subtracted, since there's no
+recorded response to work back from. Every other column rides through
+untouched, and the returned tibble gains `trigger_time`, `coil`,
+`trans_dist_mm`, `ang_dist_deg`, and `match_gap_s`. There's no window filter:
+all rows are used, minus those further than `max_gap_s` (default 0.10 s) from a
+coil frame. Stage 2 is not reimplemented — it's sourced into a private
+environment with every config slot injected, so the geometry can't drift from
+the pipeline's and nothing leaks into your globals. Pass `coil_dist =` a
+previous result to skip re-parsing the neuronav file on repeat calls.
 
 ---
 
