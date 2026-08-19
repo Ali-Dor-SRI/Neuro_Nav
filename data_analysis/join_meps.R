@@ -7,7 +7,24 @@
 # runs until you call it:
 #
 #   source("Y:/Neuro_Nav_App/data_analysis/join_meps.R")
-#   out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df)
+#   out <- join_MEPs(diff     = 0.472957,
+#                    QLG      = "Y:/Merged Data/Data/TP3C60702A.QLG",
+#                    new_df   = df,
+#                    neuronav = "Y:/Neuro_Nav_App/data/SNBR-179.txt",
+#                    sample   = "Sample 1")
+#
+# `sample` is the REFERENCE the deltas are measured from -- the moment the coil
+# was where you wanted it. Under the default target_mode = "sample_average" it
+# anchors the average: that sample's timestamp plus the next n_samples_avg - 1
+# coil frames become the target pose. It accepts, in priority order, a
+# `New Sample` / `Target Selection` NAME ("Sample 1"), a timestamp
+# ("12:21:13.545"), or a Polaris Tool frame_number. Under the legacy
+# target_mode = "target_selection" it is instead the name of the
+# `Target Selection` row to look up directly, so only a name is valid there.
+#
+# All five arguments are per-session, so none of them has a default.
+# (`neuronav` and `sample` may be omitted only when you pass `coil_dist =` a
+# coil stream from an earlier call, which already has a target baked in.)
 #
 # `new_df` is any data frame carrying an elapsed-time column (default "Time",
 # decimal MINUTES since the QtracS launch). Every other column is carried
@@ -60,7 +77,6 @@ options(digits.secs = 3)
 # Prefixed so that sourcing this file can never collide with the pipeline's
 # own globals (NEURONAV_PATH, COORD_SYSTEM, ...) in a shared R session.
 JM_ANALYSIS_DIR <- "Y:/Neuro_Nav_App/data_analysis"
-JM_NEURONAV     <- "Y:/Neuro_Nav_App/data/SNBR-179.txt"
 JM_TZ           <- "America/Toronto"
 JM_MAX_GAP_S    <- 0.10
 # Frame + target defaults follow coil_to_sample_delta.R's own documented
@@ -68,7 +84,6 @@ JM_MAX_GAP_S    <- 0.10
 # run_analysis.R happens to be set to for the last participant.
 JM_COORD_SYSTEM  <- "Polaris"
 JM_TARGET_MODE   <- "sample_average"
-JM_SAMPLE_START  <- "Sample 1"
 JM_N_SAMPLES_AVG <- 5L
 JM_HEAD_TRACKER  <- "ST893"
 # ---------------------------------------------------------------------
@@ -101,8 +116,8 @@ jm_qlg_launch <- function(QLG, session_date = NA, tz = JM_TZ) {
 # Run coil_to_sample_delta.R in a private environment and hand back its
 # `coil_dist` (time, coil, trans_dist_mm, ang_dist_deg).
 jm_coil_dist <- function(neuronav, analysis_dir, coord_system, target_mode,
-                         sample_start, n_samples_avg, head_tracker,
-                         head_relative, coil_name, sample_name, quiet) {
+                         sample, n_samples_avg, head_tracker,
+                         head_relative, coil_name, quiet) {
   script <- file.path(analysis_dir, "coil_to_sample_delta.R")
   parser <- file.path(analysis_dir, "R", "parse_brainsight.R")
   for (p in c(script, parser))
@@ -114,13 +129,17 @@ jm_coil_dist <- function(neuronav, analysis_dir, coord_system, target_mode,
   e$PARSER_PATH   <- parser
   e$COORD_SYSTEM  <- coord_system
   e$TARGET_MODE   <- target_mode
-  e$SAMPLE_START  <- sample_start
   e$N_SAMPLES_AVG <- as.integer(n_samples_avg)
   e$HEAD_TRACKER  <- head_tracker
   e$HEAD_RELATIVE <- isTRUE(head_relative)
   e$COIL_NAME     <- coil_name
-  e$SAMPLE_NAME   <- sample_name
   e$COIL_ROW_TYPE <- "Crosshairs Position"   # MNI/legacy mode only
+  # The reference sample lands in whichever slot the active target mode reads:
+  # SAMPLE_START for "sample_average", SAMPLE_NAME for legacy
+  # "target_selection". Both are set regardless, so an unrelated global of
+  # either name can never leak in through the stage's if (!exists()) guards.
+  e$SAMPLE_START  <- sample
+  e$SAMPLE_NAME   <- sample
   e$ORCHESTRATED  <- TRUE                    # skip the stage's own prints
 
   run <- function() sys.source(script, envir = e)
@@ -152,12 +171,20 @@ jm_nearest <- function(coil_times, targets) {
 #' @param QLG           Path to the QtracS .QLG run log, or a POSIXct launch time.
 #' @param new_df        Data frame with an elapsed-time column; all other
 #'                      columns are passed through untouched.
-#' @param neuronav      Brainsight streamed-info .txt for the same session.
+#' @param neuronav      Path to THIS session's Brainsight streamed-info .txt.
+#'                      Required unless `coil_dist` is supplied.
+#' @param sample        The reference the deltas are measured from. Under
+#'                      target_mode "sample_average" it anchors the averaged
+#'                      target pose and accepts a New Sample / Target Selection
+#'                      NAME ("Sample 1"), a timestamp, or a frame number;
+#'                      under legacy "target_selection" it is the name of the
+#'                      Target Selection row to use. Required unless
+#'                      `coil_dist` is supplied.
 #' @param time_col      Name of the elapsed-time column (decimal minutes).
 #' @param max_gap_s     Drop MEPs whose nearest coil frame is further away.
 #' @param coord_system  "Polaris" (head-relative) or "MNI" (legacy crosshairs).
 #' @param target_mode   "sample_average" or "target_selection" (legacy, MNI).
-#' @param sample_start  Target anchor: event name, timestamp, or frame number.
+#' @param n_samples_avg Coil frames averaged into the target, from `sample` on.
 #' @param coil_dist     Optional precomputed coil stream; skips re-parsing the
 #'                      neuronav file when calling repeatedly on one session.
 #' @return A tibble: the input columns plus trigger_time, coil,
@@ -165,17 +192,16 @@ jm_nearest <- function(coil_times, targets) {
 join_MEPs <- function(diff,
                       QLG,
                       new_df,
-                      neuronav      = JM_NEURONAV,
+                      neuronav      = NULL,   # required unless coil_dist is given
+                      sample        = NULL,   # required unless coil_dist is given
                       time_col      = "Time",
                       max_gap_s     = JM_MAX_GAP_S,
                       coord_system  = JM_COORD_SYSTEM,
                       target_mode   = JM_TARGET_MODE,
-                      sample_start  = JM_SAMPLE_START,
                       n_samples_avg = JM_N_SAMPLES_AVG,
                       head_tracker  = JM_HEAD_TRACKER,
                       head_relative = TRUE,
                       coil_name     = "auto",
-                      sample_name   = "Sample 5",
                       session_date  = NA,
                       tz            = JM_TZ,
                       coil_dist     = NULL,
@@ -195,6 +221,24 @@ join_MEPs <- function(diff,
     stop("diff must be a single number: seconds, Windows - Mac.")
   if (!is.numeric(max_gap_s) || length(max_gap_s) != 1L || max_gap_s < 0)
     stop("max_gap_s must be a single non-negative number of seconds.")
+  # The neuronav file and the reference sample both change every session, so
+  # both are required -- the only way out is handing over an already-parsed
+  # coil stream from a previous call, which has a target baked in already.
+  if (is.null(coil_dist)) {
+    if (is.null(neuronav) || !is.character(neuronav) ||
+        length(neuronav) != 1L || !nzchar(neuronav))
+      stop("neuronav must be the path to this session's Brainsight streamed-info ",
+           ".txt file, e.g. neuronav = \"Y:/Neuro_Nav_App/data/<session>.txt\". ",
+           "Pass coil_dist = <a previous result> to reuse an already-parsed ",
+           "coil stream instead.")
+    if (is.null(sample) || length(sample) != 1L || is.na(sample) ||
+        !nzchar(trimws(as.character(sample))))
+      stop("sample must name the reference the deltas are measured from, e.g. ",
+           "sample = \"Sample 1\" (a New Sample / Target Selection name, a ",
+           "timestamp, or a Polaris Tool frame number). Pass coil_dist = ",
+           "<a previous result> to reuse a coil stream that already has one.")
+    sample <- trimws(as.character(sample))
+  }
 
   elapsed <- suppressWarnings(as.numeric(new_df[[time_col]]))
   if (all(is.na(elapsed)))
@@ -216,8 +260,8 @@ join_MEPs <- function(diff,
   # ---- 3. coil distance/angle over time -----------------------------
   if (is.null(coil_dist)) {
     coil_dist <- jm_coil_dist(neuronav, analysis_dir, coord_system, target_mode,
-                              sample_start, n_samples_avg, head_tracker,
-                              head_relative, coil_name, sample_name, quiet)
+                              sample, n_samples_avg, head_tracker,
+                              head_relative, coil_name, quiet)
   }
   needed <- c("time", "coil", "trans_dist_mm", "ang_dist_deg")
   if (!all(needed %in% names(coil_dist)))
@@ -243,6 +287,9 @@ join_MEPs <- function(diff,
   # ---- 5. report -----------------------------------------------------
   if (!isTRUE(quiet)) {
     message(sprintf("QLG launch anchor : %s", format(launch_dt, "%Y-%m-%d %H:%M:%OS3")))
+    message(sprintf("Reference sample  : %s",
+                    if (is.null(sample)) "(target baked into the supplied coil_dist)"
+                    else sprintf("'%s'", sample)))
     message(sprintf("Clock offset      : %+.6f s subtracted (Windows - Mac)", diff))
     message(sprintf("Pulse window      : %s .. %s",
                     format(min(mep$trigger_time), "%H:%M:%OS3"),

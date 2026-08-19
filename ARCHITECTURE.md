@@ -321,10 +321,15 @@ call:
 
 ```r
 source("Y:/Neuro_Nav_App/data_analysis/join_meps.R")
-out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df)
+out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df,
+                 neuronav = NEURONAV_PATH, sample = "Sample 1")
 ```
 
-`new_df` needs an elapsed-time column in decimal minutes (default `Time`),
+All five arguments are per-session and none has a default. `sample` is the
+reference the deltas are measured from — under the default `sample_average`
+mode it anchors the averaged target pose, and takes an event name, a timestamp,
+or a frame number. `new_df` needs an elapsed-time column in decimal minutes
+(default `Time`),
 taken to be **the pulse itself** — no latency is subtracted, since there's no
 recorded response to work back from. Every other column rides through
 untouched, and the returned tibble gains `trigger_time`, `coil`,
@@ -333,7 +338,9 @@ all rows are used, minus those further than `max_gap_s` (default 0.10 s) from a
 coil frame. Stage 2 is not reimplemented — it's sourced into a private
 environment with every config slot injected, so the geometry can't drift from
 the pipeline's and nothing leaks into your globals. Pass `coil_dist =` a
-previous result to skip re-parsing the neuronav file on repeat calls.
+previous result to skip re-parsing the neuronav file on repeat calls — the one
+case where `neuronav` and `sample` may be omitted, since that stream already
+has a target baked in.
 
 ---
 
