@@ -29,9 +29,18 @@ _HEADER = (
     "# delta_s = Windows_clock - Mac_clock  (positive => Windows clock is AHEAD of Mac).\n"
     "# To map a Mac/neuronav timestamp onto the Windows/TMS-EMG clock:  windows = mac + delta_s\n"
     "# rtt_ms is the round-trip network delay (already removed from delta_s).\n"
+    "# participant is the study code typed into the Mac app for this session\n"
+    "#   (empty if the operator did not supply one). It is the LAST column so\n"
+    "#   that logs written before it existed keep their column positions.\n"
     "# Tab-separated columns:\n"
     "# win_local_time\tdelta_s\trtt_ms\tmac_local_time\tpeer"
-    "\tt1_mac_epoch\tt2_win_epoch\tt3_win_epoch\tt4_mac_epoch\n"
+    "\tt1_mac_epoch\tt2_win_epoch\tt3_win_epoch\tt4_mac_epoch\tparticipant\n"
+)
+
+# Written once when appending to a log created before the participant column
+# existed, so a human reading the file can see why the row width changed.
+_MIGRATION_NOTE = (
+    "# --- 'participant' appended as a 10th column from the next row on ---\n"
 )
 
 
@@ -62,14 +71,35 @@ def _fmt_local(epoch):
     return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
-def append_log(offset, delay, t1, t2, t3, t4, peer, path=None):
+def _is_pre_participant_log(path):
+    """True for an existing, non-empty log whose header predates the
+    participant column — so the note explaining the extra field is written
+    exactly once. Only the '#' header lines are inspected, so a participant id
+    that happens to contain the word can never be mistaken for the header."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    if not head.strip():
+        return False
+    return not any("participant" in ln
+                   for ln in head.splitlines() if ln.startswith("#"))
+
+
+def append_log(offset, delay, t1, t2, t3, t4, peer, participant="", path=None):
     """Append one time-sync result as a line to the log file.
+
+    `participant` is the study code the Mac sent for this session ("" if the
+    operator supplied none). It is written LAST so that the positions of the
+    original nine columns are unchanged for anything already parsing the log.
 
     Writes the column header first if the file is new/empty. Returns the path
     written to. Raises OSError on write failure (caller decides how loud).
     """
     path = path or timesync_log_path()
     need_header = (not os.path.exists(path)) or os.path.getsize(path) == 0
+    need_note   = (not need_header) and _is_pre_participant_log(path)
     row = "\t".join((
         _fmt_local(t2),            # Windows local time the sync landed
         f"{offset:+.6f}",          # delta_s (Windows - Mac)
@@ -77,9 +107,12 @@ def append_log(offset, delay, t1, t2, t3, t4, peer, path=None):
         _fmt_local(t1),            # Mac local time at send
         str(peer),
         f"{t1:.6f}", f"{t2:.6f}", f"{t3:.6f}", f"{t4:.6f}",
+        str(participant or ""),    # study code typed on the Mac
     ))
     with open(path, "a", encoding="utf-8") as f:
         if need_header:
             f.write(_HEADER)
+        elif need_note:
+            f.write(_MIGRATION_NOTE)
         f.write(row + "\n")
     return path

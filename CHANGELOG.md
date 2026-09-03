@@ -7,6 +7,47 @@ project-wide release tag (`vX.Y.Z`).
 
 ---
 
+## `alert-brainsight-v2.5.0` — 2026-09-01
+
+### Added — participant ID recorded on the time-sync log
+
+The study code for a session is now entered on the **Mac** and stamped by the
+Windows receiver on every row of `time_sync_log.txt`, so each clock offset
+records whose session it belongs to.
+
+- **Wire protocol** (`trigger_app_AJ/common/protocol.py`): new one-way
+  `SESSION:<participant_id>` line, sent by the Mac immediately after `AUTH:OK`
+  and **before** the time-sync handshake, so a connection's first sync row is
+  already labelled. New `sanitize_participant()` (shared contract, mirrored in
+  the two stdlib-only Mac copies) strips tabs/newlines/non-printables and caps
+  the id at 64 characters — the wire is line-oriented and the log is
+  tab-separated, so an unsanitized paste would corrupt both.
+- **Windows receiver** (`windows/server.py`, `windows/main.py`): holds the id
+  for the life of the connection (cleared on connect/disconnect), stamps it on
+  each logged row, echoes `===> PARTICIPANT: …` to the console so the QTrack
+  operator can verify it, and exposes it via `on_participant` /
+  `on_timesync(..., participant)`.
+- **Log format** (`common/timesync.py`): `participant` added as the **last**
+  column, so the nine existing columns keep their positions for anything
+  already parsing the log. Appending to a pre-participant log writes a one-time
+  `#` note recording the width change.
+- **Mac CLI** (`python/alert_brainsight_v2.5.0.py`): `--participant SNBR-000`
+  at launch, `set participant <id>` live (applies to rows logged from then on —
+  reconnect for a fresh row under a corrected id), shown in `status`.
+- **Mac GUI** (`brainsight_gui/`): required "Participant ID" field at the top of
+  Setup, normalized in place on submit, displayed read-only in the Perform top
+  bar. Deliberately **not** persisted to `config.json` (it changes per session
+  and it is participant data).
+- **Analysis** (`data_analysis/R/sync_mep_times.R`): `read_timesync()` now
+  splits rows by hand instead of `read.table`, so mixed 9-/10-field logs parse,
+  and returns a `participant` column (`NA` where a row is unlabelled).
+
+Why the Mac end: the Windows receiver types `ss` into whatever window has
+focus, so clicking into its console to type a participant ID would take focus
+off QTrack and a trigger arriving at that moment would land in the console.
+
+---
+
 ## `dist-v0.1.0` — 2026-05-29
 
 ### Added — distributable bundles for both platforms

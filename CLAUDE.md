@@ -25,7 +25,8 @@ Neuro_Nav/
 │   ├── alert_brainsight_v2.1.0.py   per-axis thresholds
 │   ├── alert_brainsight_v2.2.0.py   + TCP trigger output to Windows receiver
 │   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target
-│   ├── alert_brainsight_v2.4.0.py   + TMS trigger on/off toggle  (current)
+│   ├── alert_brainsight_v2.4.0.py   + TMS trigger on/off toggle
+│   ├── alert_brainsight_v2.5.0.py   + participant ID on the time-sync log  (current)
 │   └── brainsight_gui/          Tk GUI wrapping the monitor + trigger sender
 ├── R/                           R scripts — run via RStudio with Neuro_Nav.Rproj open
 │   ├── parse_brainsight.R       Shared parser library (source in other scripts)
@@ -39,7 +40,7 @@ Neuro_Nav/
 │   ├── R/                      parse_brainsight.R (+ explore.R, multi_target_explore.R, sync_mep_times.R)
 │   └── output/                 generated CSV + PNGs
 └── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
-    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.4.0)
+    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.5.0)
     ├── TMS_CrossPlatform_Trigger_System.md
     ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
     └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_log.txt)
@@ -99,20 +100,23 @@ python3 python/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
 Reports file size and growth every 5 s. Useful to confirm a live session
 file is being written before starting more complex tools.
 
-### Drift alert — `python/alert_brainsight_v2.4.0.py`  ← current version
+### Drift alert — `python/alert_brainsight_v2.5.0.py`  ← current version
 
 ```bash
-python3 python/alert_brainsight_v2.4.0.py "data/Session 3  Streamed Info.txt"
-python3 python/alert_brainsight_v2.4.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+python3 python/alert_brainsight_v2.5.0.py "data/Session 3  Streamed Info.txt"
+python3 python/alert_brainsight_v2.5.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
 
 # Send STATE:RED / STATE:GREEN triggers to the Windows receiver on transitions:
-python3 python/alert_brainsight_v2.4.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
 
 # Connected for time-sync + distance monitoring, but NO SS triggers to QTrack:
-python3 python/alert_brainsight_v2.4.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
+python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
 
 # Pin a target manually instead of auto-following the file:
-python3 python/alert_brainsight_v2.4.0.py "<file>" --no-follow
+python3 python/alert_brainsight_v2.5.0.py "<file>" --no-follow
+
+# Label the session so Windows stamps the study code on every time-sync row:
+python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --participant SNBR-000
 ```
 
 **Startup flow:**
@@ -142,6 +146,17 @@ instant you flip it; on re-enable, the next in/out-of-range transition fires
 normally. Default ON (current behavior); start with `--no-triggers` for
 monitoring-only, or toggle live with `set trigger on|off`.
 
+**Participant ID** (v2.5.0): `--participant SNBR-000` labels the session. The
+id is sent to the Windows receiver as a `SESSION:` line right after auth and
+**before** the time-sync handshake, and Windows stamps it on every row of
+`time_sync_log.txt` — so each clock offset records whose session it belongs to.
+It is entered on the **Mac** by design: the Windows receiver types `ss` into
+whatever window has focus, so typing there mid-session could swallow a trigger
+meant for QTrack (the receiver echoes the id to its console instead). Change it
+live with `set participant <id>`; the new value applies to rows logged from
+then on, so reconnect if you need a fresh row under a corrected id. Use the
+study code, never a name.
+
 **Default thresholds:**
 
 | Parameter | Default | Meaning                          |
@@ -160,6 +175,7 @@ set target <n|name>   pin active target (turns auto-follow OFF; resets alert sta
 set driver <n|name>   switch active driver (resets alert state)
 set follow on|off     toggle auto-follow of the file's target selection
 set trigger on|off    enable/disable sending SS triggers (monitoring-only when off)
+set participant <id>  study code stamped on the Windows time-sync log rows
 set loc <mm>          linear threshold — scalar (all axes)
 set loc <x> <y> <z>   linear threshold — per-axis
 set ang <rad>         angular threshold — scalar (all axes)
@@ -174,9 +190,9 @@ alert and reminder messages fire immediately.
 
 ### Mac GUI — `python/brainsight_gui/` (`python -m brainsight_gui`)
 
-Tk wrapper around the v2.4.0 monitor + trigger sender. Two-step wizard:
-**Setup** (file path, Windows IP/port/token, Connect & Start) →  **Perform**
-(driver + target dropdowns, per-axis threshold sliders, scrolling log).
+Tk wrapper around the v2.5.0 monitor + trigger sender. Two-step wizard:
+**Setup** (participant ID, file path, Windows IP/port/token, Connect & Start) →
+**Perform** (driver + target dropdowns, per-axis threshold sliders, scrolling log).
 The backend is `monitor_worker.MonitorWorker` (mirrors the CLI logic with
 callbacks instead of `print`/REPL). Auto-follow is exposed as the
 "Auto-follow target selected in the Brainsight file" checkbox; picking from
@@ -187,10 +203,16 @@ for time-sync + distance monitoring but sends no `ss` to QTrack. Defaults ON
 each launch (not persisted). `launch_gui.command` double-click-launches it on
 the Mac.
 
+The **Participant ID** is the first Setup field and is **required** — an
+unlabelled time-sync row can't be matched to a participant afterwards. It is
+sent to Windows on connect and shown read-only in the Perform panel's top bar;
+to change it, go Back (which reconnects and writes a freshly labelled row).
+
 `brainsight_gui/config_store.py` persists the Windows IP, port, and token to
 `~/Library/Application Support/Neuro_Nav/config.json` after a successful
-connection and prefills them on the next launch (the Brainsight file path is
-not saved — it changes per session).
+connection and prefills them on the next launch (the Brainsight file path and
+the participant ID are not saved — they change per session, and the id is
+participant data).
 
 ### Trigger token — `trigger_app_AJ/common/config.py`
 
@@ -208,11 +230,12 @@ operators only re-enter it after the weekly rotation. (Both token files and
 
 So events recorded on the Mac (neuronav/Brainsight) can be lined up with the
 TMS/EMG files recorded on Windows (QTrack), the two clocks are compared **once
-per connection**, right after `AUTH:OK` and before any `STATE:` traffic. The
-exchange is round-trip (NTP-style) so network latency is cancelled, not folded
-into the result:
+per connection**, right after `AUTH:OK` (and the `SESSION:` participant line)
+and before any `STATE:` traffic. The exchange is round-trip (NTP-style) so
+network latency is cancelled, not folded into the result:
 
 ```
+Mac → Win:  SESSION:<participant> (sent first; labels the rows below)
 Mac → Win:  TIME:<t1>            t1 = Mac epoch when sent
 Win → Mac:  TIMEACK:<t2> <t3>    t2 = Win recv epoch, t3 = Win send epoch
 Mac → Win:  TIMESYNC:<t1> <t4>   t4 = Mac epoch when TIMEACK arrived
@@ -225,7 +248,11 @@ round-trip network time. To map a Mac/neuronav timestamp onto the Windows clock:
 **`windows_time = mac_time + offset`**. Each result is appended to
 **`time_sync_log.txt`** (next to the .exe / package, git-ignored): one
 tab-separated row per sync with both machines' local wall-clock times, the
-delta, the round-trip delay, and the four raw epochs. The `TIMEOK` reply is the
+delta, the round-trip delay, the four raw epochs, and the **participant**
+(v2.5.0 — last column, so logs written before it keep their field positions;
+empty when no id was sent, and a `#` note marks the width change once in an
+existing log). `data_analysis/R/sync_mep_times.R` reads the log and tolerates
+both widths. The `TIMEOK` reply is the
 Mac's notification that its timestamp was received and logged (surfaced in the
 CLI log and the GUI log). The whole exchange is **best-effort** — a sync failure
 is logged but never aborts the trigger link. A reconnect re-runs the sync.
@@ -349,10 +376,10 @@ Extra R deps beyond the list below: `readxl`, `lubridate`, `stringr`.
 
 Python monitoring/alert scripts are versioned in the filename:
 `alert_brainsight_v1.py`, `alert_brainsight_v2.py`,
-`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.4.0.py`.
+`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.5.0.py`.
 
 Keep old versions in `python/` — do not delete them. The highest version
-number is always the current one (currently **v2.4.0**). The `brainsight_gui/`
+number is always the current one (currently **v2.5.0**). The `brainsight_gui/`
 package tracks the latest CLI version's logic rather than carrying a version
 in its name.
 

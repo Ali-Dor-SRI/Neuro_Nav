@@ -43,6 +43,18 @@ def connection_lost(reason=""):
 def auth_denied():
     return ALERT, "Auth rejected by Windows — check the token"
 
+def participant_sent(participant):
+    return OK, (f"Participant '{participant}' sent — Windows will stamp it on "
+                f"this session's time-sync log rows")
+
+def participant_missing():
+    return WARN, ("No participant ID sent — this session's time-sync rows will "
+                  "be unlabelled")
+
+def participant_send_failed(reason):
+    return WARN, (f"Participant ID not delivered ({reason}) — time-sync rows may "
+                  f"be unlabelled; the link continues")
+
 def time_synced(offset, delay):
     sign = "ahead of" if offset >= 0 else "behind"
     return OK, (f"Time-sync OK — Windows logged our timestamp; Windows clock is "

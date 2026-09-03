@@ -9,8 +9,20 @@ Handshake (Windows -> Mac):
     AUTH:OK\\n        (token accepted)
     AUTH:DENIED\\n    (token mismatch; Windows then closes the socket)
 
-Time-sync handshake (round-trip / NTP-style, runs once right after AUTH:OK,
-before any STATE traffic):
+Session label (Mac -> Windows), sent once right after AUTH:OK and BEFORE the
+time-sync handshake, so the participant is already known when the first
+time-sync row is written:
+    SESSION:<participant_id>\\n
+
+The receiver holds it for the lifetime of the connection and stamps it on every
+time-sync row it logs. It is one-way — Windows does not reply. The Mac may
+re-send it later (e.g. the operator corrects a typo); the new value applies to
+subsequent time-sync rows, not to ones already written. The id is passed
+through `sanitize_participant()` on both ends: no tabs (the log is
+tab-separated), no newlines (the wire is line-oriented), length-capped.
+
+Time-sync handshake (round-trip / NTP-style, runs once right after the SESSION
+line, before any STATE traffic):
     Mac -> Windows:  TIME:<t1>\\n          t1 = Mac epoch when sent
     Windows -> Mac:  TIMEACK:<t2> <t3>\\n   t2 = Win recv epoch, t3 = Win send epoch
     Mac -> Windows:  TIMESYNC:<t1> <t4>\\n  t4 = Mac epoch when TIMEACK arrived
@@ -33,8 +45,9 @@ The receiver accepts exactly one Mac connection at a time. A newer
 authenticated connection replaces the older one.
 """
 
-PREFIX_AUTH  = "AUTH:"
-PREFIX_STATE = "STATE:"
+PREFIX_AUTH    = "AUTH:"
+PREFIX_STATE   = "STATE:"
+PREFIX_SESSION = "SESSION:"
 
 PREFIX_TIME     = "TIME:"
 PREFIX_TIMEACK  = "TIMEACK:"
@@ -49,6 +62,8 @@ STATE_RED   = "RED"
 STATES      = (STATE_GREEN, STATE_RED)
 
 LINE_LIMIT = 256   # max bytes per handshake line
+
+PARTICIPANT_MAX_LEN = 64   # study codes are short; keeps SESSION: under LINE_LIMIT
 
 
 def read_line(sock, limit=LINE_LIMIT):
@@ -75,6 +90,25 @@ def make_auth(token):
 
 def make_state(state):
     return f"{PREFIX_STATE}{state}\n".encode("utf-8")
+
+
+def sanitize_participant(value, limit=PARTICIPANT_MAX_LEN):
+    """Make a typed participant id safe for the wire AND for the log file.
+
+    The wire is newline-delimited and the time-sync log is tab-separated, so a
+    pasted value carrying either would corrupt both. Non-printable characters
+    are dropped, surrounding whitespace trimmed, internal whitespace runs
+    collapsed to single spaces, and the result capped at `limit` characters.
+    Returns "" for None/blank input.
+    """
+    if not value:
+        return ""
+    text = "".join(ch for ch in str(value) if ch.isprintable())
+    return " ".join(text.split())[:limit]
+
+
+def make_session(participant):
+    return f"{PREFIX_SESSION}{sanitize_participant(participant)}\n".encode("utf-8")
 
 
 # ── Time-sync messages ─────────────────────────────────────────────────────────

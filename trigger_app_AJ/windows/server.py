@@ -31,18 +31,20 @@ class TriggerReceiver:
     thread-safe or marshal as appropriate):
         on_state(state, is_change)     # GREEN / RED; is_change is False on duplicates
         on_peer_change(connected, addr_str)
-        on_timesync(offset, delay, peer_str)   # clock offset (Win - Mac), seconds
+        on_timesync(offset, delay, peer_str, participant)  # clock offset (Win - Mac), seconds
+        on_participant(participant)    # study code the Mac sent for this session
         on_log(message)
     """
 
     def __init__(self, token, port=DEFAULT_PORT,
                  on_state=None, on_peer_change=None, on_timesync=None,
-                 on_log=None, timesync_log_path=None):
+                 on_participant=None, on_log=None, timesync_log_path=None):
         self.token = token
         self.port  = port
         self._on_state         = on_state         or (lambda *a, **kw: None)
         self._on_peer_change   = on_peer_change   or (lambda *a, **kw: None)
         self._on_timesync      = on_timesync      or (lambda *a, **kw: None)
+        self._on_participant   = on_participant   or (lambda *a, **kw: None)
         self._on_log           = on_log           or (lambda *a, **kw: None)
         self._timesync_log_path = timesync_log_path or timesync.timesync_log_path()
 
@@ -51,6 +53,7 @@ class TriggerReceiver:
         self._peer_address  = None
         self._last_state    = None
         self._ts_pending    = None   # (t1, t2, t3) between TIME and TIMESYNC
+        self._participant   = ""     # study code from the current connection's SESSION line
         self._lock          = threading.Lock()
         self.running        = False
 
@@ -143,6 +146,9 @@ class TriggerReceiver:
             # received counts as a transition (forces a keystroke).
             self._last_state = None
             self._ts_pending = None
+            # The participant belongs to the connection that sent it; a new Mac
+            # connection re-declares it (or leaves it blank).
+            self._participant = ""
         if old is not None:
             self._on_log("Replacing previous Mac connection")
             _close(old)
@@ -174,6 +180,7 @@ class TriggerReceiver:
                     self._peer_address = None
                     self._last_state   = None
                     self._ts_pending   = None
+                    self._participant  = ""
             if still_current:
                 self._on_log("Mac disconnected")
                 self._on_peer_change(False, None)
@@ -189,6 +196,9 @@ class TriggerReceiver:
         if line.startswith(proto.PREFIX_TIMESYNC):
             self._handle_timesync(sock, line)
             return
+        if line.startswith(proto.PREFIX_SESSION):
+            self._handle_session(line)
+            return
         if not line.startswith(proto.PREFIX_STATE):
             self._on_log(f"Unknown message: {line!r}")
             return
@@ -200,6 +210,27 @@ class TriggerReceiver:
             is_change = (state != self._last_state)
             self._last_state = state
         self._on_state(state, is_change)
+
+    # ── session label ─────────────────────────────────────────────────────────
+
+    def _handle_session(self, line):
+        """Mac sent SESSION:<participant>. Hold it for this connection and
+        stamp it on every time-sync row logged from here on. One-way — no
+        reply. The Mac sends it before the first TIME:, so the opening sync is
+        already labelled; a later re-send (typo fix) affects later rows only."""
+        participant = proto.sanitize_participant(
+            line[len(proto.PREFIX_SESSION):])
+        with self._lock:
+            previous = self._participant
+            self._participant = participant
+        if not participant:
+            self._on_log("Participant: (none supplied by the Mac)")
+        elif previous and previous != participant:
+            self._on_log(f"Participant changed: {previous!r} -> {participant!r} "
+                         f"(applies to time-sync rows logged from now on)")
+        else:
+            self._on_log(f"Participant: {participant}")
+        self._on_participant(participant)
 
     # ── time-sync ─────────────────────────────────────────────────────────────
 
@@ -234,25 +265,27 @@ class TriggerReceiver:
             pending = self._ts_pending
             self._ts_pending = None
             peer = self._peer_address
+            participant = self._participant
         if pending is None:
             self._on_log("Time-sync: TIMESYNC with no prior TIME — ignored")
             return
         t1, t2, t3 = pending
         offset, delay = timesync.compute_offset(t1, t2, t3, t4)
         peer_str = f"{peer[0]}:{peer[1]}" if peer else "?"
+        who = participant or "(no participant)"
         try:
             path = timesync.append_log(offset, delay, t1, t2, t3, t4, peer_str,
-                                       self._timesync_log_path)
+                                       participant, self._timesync_log_path)
             self._on_log(
                 f"Time-sync: delta = {offset:+.6f} s (Windows - Mac), "
-                f"rtt {delay * 1000.0:.2f} ms - logged to {path}")
+                f"rtt {delay * 1000.0:.2f} ms - logged for {who} to {path}")
         except OSError as exc:
             self._on_log(f"Time-sync: log write failed: {exc}")
         try:
             sock.sendall(proto.make_timeok(offset, delay))
         except OSError as exc:
             self._on_log(f"Time-sync: TIMEOK send failed: {exc}")
-        self._on_timesync(offset, delay, peer_str)
+        self._on_timesync(offset, delay, peer_str, participant)
 
 
 def _close(sock):

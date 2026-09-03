@@ -3,6 +3,7 @@
 Layout:
   ┌─ Window ──────────────────────────────────────────────┐
   │  Module 1 — Setup                                     │
+  │    [participant ID]                                   │
   │    [file path]                          [Browse...]   │
   │    [Windows IP]            [Port]                     │
   │    [Token]                                            │
@@ -118,16 +119,19 @@ class App:
 
     # ── Setup -> Worker ──────────────────────────────────────────────────────
 
-    def _on_setup_next(self, filepath, host, port, token):
+    def _on_setup_next(self, participant, filepath, host, port, token):
         """User clicked Next on Setup. Start the worker; transition to
         Perform happens later, when the TCP link comes up."""
         # Remember these to persist once the link authenticates successfully.
+        # The participant is never persisted — new one every session.
         self._pending_conn     = (host, port, token)
         self._saved_on_connect = False
+        self.perform.set_participant(participant)
         self.worker.configure(filepath=filepath,
                               trigger_host=host,
                               trigger_port=port,
-                              trigger_token=token)
+                              trigger_token=token,
+                              participant=participant)
         self.worker.set_linear_threshold(self.perform._linear_widget.get())
         self.worker.set_angular_threshold(self.perform._angular_widget.get())
         ok = self.worker.start()

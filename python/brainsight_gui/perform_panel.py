@@ -56,6 +56,10 @@ class PerformPanel(ttk.LabelFrame):
         top_bar = ttk.Frame(self); top_bar.pack(fill="x", pady=(0, 8))
         self._back_btn = ttk.Button(top_bar, text="← Back", command=self._on_back_clicked)
         self._back_btn.pack(side="left")
+        # Who this session is being logged under — read-only here; change it by
+        # going Back to Setup, which reconnects and re-stamps a fresh sync row.
+        self._participant_label = ttk.Label(top_bar, text="", foreground="#333")
+        self._participant_label.pack(side="left", padx=(12, 0))
         self._link_status = ttk.Label(top_bar, text="", foreground="#1a7f1a")
         self._link_status.pack(side="right")
 
@@ -163,6 +167,11 @@ class PerformPanel(ttk.LabelFrame):
         else:
             self._link_status.config(text="● Link: lost — reconnecting...",
                                       foreground="#c0392b")
+
+    def set_participant(self, participant):
+        """Show the study code this session's time-sync rows are logged under."""
+        self._participant_label.config(
+            text=f"Participant: {participant}" if participant else "")
 
     def populate_drivers(self, names, active=None):
         self._driver_combo["values"] = list(names)

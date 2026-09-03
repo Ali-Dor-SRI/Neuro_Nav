@@ -1,13 +1,21 @@
 """Module 1: Setup panel.
 
 Collects the inputs the worker needs to start:
+  * Participant / study code for this session
   * Brainsight .txt file path (with a Browse... button)
   * Windows machine IP
   * Windows machine TCP port (default 5050)
   * Auth token shown in the Windows receiver
 
+The participant ID is entered here rather than on the Windows receiver: the
+receiver types `ss` into whatever window has focus, so typing on that machine
+mid-session could swallow a trigger meant for QTrack. It is sent over the
+trigger link and Windows stamps it on every time-sync log row. Like the file
+path — and unlike the connection details — it is deliberately NOT persisted
+between launches: it changes every session, and it is participant data.
+
 Navigation:
-  * "Next ->" button fires `on_next(filepath, host, port, token)`. The
+  * "Next ->" button fires `on_next(participant, filepath, host, port, token)`. The
     controller starts the worker; the link comes up asynchronously. The
     button transforms into "Cancel" and the fields lock while we wait.
   * "Cancel" fires `on_cancel()` (controller stops the worker). Fields
@@ -30,6 +38,7 @@ class SetupPanel(ttk.LabelFrame):
         self._on_next   = on_next   or (lambda *a, **kw: None)
         self._on_cancel = on_cancel or (lambda: None)
 
+        self._participant_var = tk.StringVar()
         self._file_var  = tk.StringVar()
         self._ip_var    = tk.StringVar()
         self._port_var  = tk.StringVar(value=str(DEFAULT_PORT))
@@ -69,6 +78,18 @@ class SetupPanel(ttk.LabelFrame):
     # ── widget construction ──────────────────────────────────────────────────
 
     def _build(self):
+        # Participant row — first, because it labels everything the session
+        # writes. Sent to Windows and stamped on the time-sync log.
+        row = ttk.Frame(self); row.pack(fill="x", pady=(0, 4))
+        ttk.Label(row, text="Participant ID:", width=18, anchor="e").pack(side="left")
+        self._participant_entry = ttk.Entry(row, textvariable=self._participant_var)
+        self._participant_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        row = ttk.Frame(self); row.pack(fill="x", pady=(0, 6))
+        ttk.Label(row, text="", width=18).pack(side="left")
+        ttk.Label(row, text="Study code only (e.g. SNBR-000) — never a name. "
+                            "Recorded in the Windows time-sync log.",
+                  foreground="#777").pack(side="left", padx=(6, 0))
+
         # File path row
         row = ttk.Frame(self); row.pack(fill="x", pady=(0, 4))
         ttk.Label(row, text="Brainsight file:", width=18, anchor="e").pack(side="left")
@@ -126,11 +147,19 @@ class SetupPanel(ttk.LabelFrame):
             return
 
         # idle -> connecting. Validate inputs first.
+        # Normalize in the field itself, so what the operator sees is exactly
+        # what gets recorded in the Windows time-sync log.
+        participant = " ".join(self._participant_var.get().split())
+        self._participant_var.set(participant)
         path  = self._file_var.get().strip()
         ip    = self._ip_var.get().strip()
         port_s= self._port_var.get().strip()
         token = self._token_var.get().strip()
 
+        # Required: an unlabelled time-sync row can't be matched to a
+        # participant afterwards, which is the whole point of recording it.
+        if not participant:
+            self._flash_invalid(self._participant_entry); return
         if not path:
             self._flash_invalid(self._file_entry); return
         if not ip:
@@ -145,7 +174,7 @@ class SetupPanel(ttk.LabelFrame):
             self._flash_invalid(self._token_entry); return
 
         self._enter_connecting()
-        self._on_next(path, ip, port, token)
+        self._on_next(participant, path, ip, port, token)
 
     def reset_to_idle(self):
         """Called by the controller after Back from Perform -- restores idle UI."""
@@ -166,8 +195,8 @@ class SetupPanel(ttk.LabelFrame):
 
     def _set_fields_locked(self, locked):
         state = "disabled" if locked else "normal"
-        for w in (self._file_entry, self._browse_btn, self._ip_entry,
-                  self._port_entry, self._token_entry):
+        for w in (self._participant_entry, self._file_entry, self._browse_btn,
+                  self._ip_entry, self._port_entry, self._token_entry):
             w.config(state=state)
 
     def _flash_invalid(self, widget):

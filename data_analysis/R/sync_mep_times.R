@@ -45,17 +45,25 @@ options(digits.secs = 3)   # show milliseconds when printing POSIXct
 # ---- helpers --------------------------------------------------------
 
 # Parse the time-sync log (tab-separated, '#'-commented header).
-# Columns: win_local_time, delta_s, rtt_ms, mac_local_time, peer, t1..t4
+# Columns: win_local_time, delta_s, rtt_ms, mac_local_time, peer, t1..t4,
+#          participant  (10th column, added later -- rows written before it
+#          exists have only 9 fields, so rows are split by hand rather than
+#          with read.table, which needs a rectangular table).
 read_timesync <- function(path) {
   raw  <- readLines(path, warn = FALSE)
   rows <- raw[!grepl("^\\s*#", raw) & nzchar(trimws(raw))]
   if (length(rows) == 0L) stop("No data rows in time-sync log: ", path)
-  m <- read.table(text = rows, sep = "\t", stringsAsFactors = FALSE,
-                  quote = "", comment.char = "")
+  f     <- strsplit(rows, "\t", fixed = TRUE)
+  field <- function(i) vapply(f, function(x) if (length(x) >= i) x[[i]] else NA_character_,
+                              character(1))
   tibble(
-    win_local_time = ymd_hms(m[[1]], tz = TZ),
-    delta_s        = as.numeric(m[[2]]),
-    mac_local_time = ymd_hms(m[[4]], tz = TZ)
+    win_local_time = ymd_hms(field(1), tz = TZ),
+    delta_s        = as.numeric(field(2)),
+    mac_local_time = ymd_hms(field(4), tz = TZ),
+    # NA when the row predates the participant column AND when the operator
+    # supplied no id (a trailing empty field is not split out) -- both mean
+    # "this sync was not labelled".
+    participant    = field(10)
   )
 }
 

@@ -112,8 +112,8 @@ it and turns auto-follow off.
 
 | | CLI | GUI |
 |---|---|---|
-| Entry | [`python/alert_brainsight_v2.4.0.py`](python/alert_brainsight_v2.4.0.py) | [`python/brainsight_gui/`](python/brainsight_gui/) (`python3 -m brainsight_gui`) |
-| Control | Interactive REPL (`set target`, `set loc 30 40 50`, `status`, `quit`) | Two-panel wizard: **Setup** (file + IP/port/token) → **Perform** (dropdowns, sliders, colour-coded log) |
+| Entry | [`python/alert_brainsight_v2.5.0.py`](python/alert_brainsight_v2.5.0.py) | [`python/brainsight_gui/`](python/brainsight_gui/) (`python3 -m brainsight_gui`) |
+| Control | Interactive REPL (`set target`, `set loc 30 40 50`, `status`, `quit`) | Two-panel wizard: **Setup** (participant + file + IP/port/token) → **Perform** (dropdowns, sliders, colour-coded log) |
 | Windows link | Optional — omit `--trigger-to` for a terminal-only monitor | **Required** — the GUI won't start without IP/port/token |
 
 The GUI is a clean **backend / view / controller** split:
@@ -153,6 +153,13 @@ once per connection, right after auth. It's the NTP round-trip:
 Every result is appended to `time_sync_log.txt`. This is what later makes the
 offline analysis possible at all — it's best-effort, and a failure never aborts
 the trigger link.
+
+**Participant** — the study code is typed on the **Mac** (GUI Setup field, or
+`--participant` on the CLI) and sent as `SESSION:<id>` immediately after auth,
+before the first `TIME:`. Windows stamps it on every row it writes to
+`time_sync_log.txt` (last column), so each offset says whose session it is. It
+lives on the Mac end because the receiver types `ss` into the focused window —
+typing on that machine mid-session could swallow a trigger meant for QTrack.
 
 **The Windows side** ([`windows/server.py`](trigger_app_AJ/windows/server.py) +
 [`qtrack.py`](trigger_app_AJ/windows/qtrack.py)) accepts one Mac at a time (a
@@ -364,13 +371,13 @@ cd python && python3 -m brainsight_gui
 **Mac — CLI, terminal-only (no Windows machine needed):**
 
 ```bash
-python3 python/alert_brainsight_v2.4.0.py "path/to/Streamed Info.txt"
+python3 python/alert_brainsight_v2.5.0.py "path/to/Streamed Info.txt"
 ```
 
 **Mac — CLI, with triggering:**
 
 ```bash
-python3 python/alert_brainsight_v2.4.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
+python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
 ```
 
 **Check a session file is actually being written:**
@@ -404,7 +411,7 @@ Both bundles are self-contained — lab machines need no Python.
 ## 7. Conventions and gotchas
 
 - **Versioned filenames, not branches.** `alert_brainsight_v1.py` →
-  `v2.4.0.py`; old versions are kept on purpose. **The highest number is the
+  `v2.5.0.py`; old versions are kept on purpose. **The highest number is the
   current one.** The GUI tracks the latest CLI's logic instead of carrying its
   own version.
 - **The Mac side is stdlib-only** (`parse_brainsight.py` aside, which needs
@@ -425,7 +432,7 @@ Both bundles are self-contained — lab machines need no Python.
 - **Docs to cross-check:** [`CLAUDE.md`](CLAUDE.md) is the deepest reference but
   still describes an `R/` directory at the repo root — those helpers now live in
   [`data_analysis/R/`](data_analysis/R/). [`README.md`](README.md) still names
-  v2.2.0 as the CLI entry point; v2.4.0 is current.
+  v2.2.0 as the CLI entry point; v2.5.0 is current.
   [`trigger_app_AJ/README.md`](trigger_app_AJ/README.md) is the authority on the
   wire protocol and troubleshooting; [`CHANGELOG.md`](CHANGELOG.md) records what
   each version added.
@@ -435,7 +442,7 @@ Both bundles are self-contained — lab machines need no Python.
 | To understand… | Read |
 |---|---|
 | The file format everything depends on | [`python/parse_brainsight.py`](python/parse_brainsight.py) — the `SCHEMAS` dict is the whole spec |
-| The live drift logic, end to end | [`python/alert_brainsight_v2.4.0.py`](python/alert_brainsight_v2.4.0.py) — `monitor_loop()` is the heart |
+| The live drift logic, end to end | [`python/alert_brainsight_v2.5.0.py`](python/alert_brainsight_v2.5.0.py) — `monitor_loop()` is the heart |
 | How the two machines agree on time | [`trigger_app_AJ/common/timesync.py`](trigger_app_AJ/common/timesync.py) |
 | How the GUI stays thread-safe | [`python/brainsight_gui/monitor_worker.py`](python/brainsight_gui/monitor_worker.py) — the docstring states the contract |
 | The offline analysis | [`data_analysis/run_analysis.R`](data_analysis/run_analysis.R) — its `INPUTS` block is the whole interface — then the three stage scripts in order |

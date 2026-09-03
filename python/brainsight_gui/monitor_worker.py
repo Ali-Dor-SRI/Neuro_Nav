@@ -43,6 +43,7 @@ TRIGGER_RECONNECT_MAX_SEC     = 30
 # canonical definition).
 PREFIX_AUTH  = "AUTH:"
 PREFIX_STATE = "STATE:"
+PREFIX_SESSION  = "SESSION:"
 PREFIX_TIME     = "TIME:"
 PREFIX_TIMEACK  = "TIMEACK:"
 PREFIX_TIMESYNC = "TIMESYNC:"
@@ -51,6 +52,21 @@ AUTH_OK      = "AUTH:OK"
 AUTH_DENIED  = "AUTH:DENIED"
 STATE_GREEN  = "GREEN"
 STATE_RED    = "RED"
+
+PARTICIPANT_MAX_LEN = 64   # keeps SESSION: under the 256-byte line limit
+
+
+def sanitize_participant(value, limit=PARTICIPANT_MAX_LEN):
+    """Make a typed participant id safe for the wire AND for the log file.
+
+    The wire is newline-delimited and the Windows time-sync log is
+    tab-separated, so a pasted value carrying either would corrupt both.
+    Mirrors trigger_app_AJ/common/protocol.sanitize_participant().
+    """
+    if not value:
+        return ""
+    text = "".join(ch for ch in str(value) if ch.isprintable())
+    return " ".join(text.split())[:limit]
 
 
 # ── Geometry / parsing (copied from alert_brainsight_v2.2.0) ────────────────
@@ -114,10 +130,11 @@ def _read_line(sock, limit=256):
 class _TriggerSender:
     """Long-lived TCP client. Reconnects automatically. Best-effort sends."""
 
-    def __init__(self, host, port, token, on_log, on_link_state):
+    def __init__(self, host, port, token, on_log, on_link_state, participant=""):
         self.host = host; self.port = port; self.token = token
         self._on_log        = on_log         # callable(level, message)
         self._on_link_state = on_link_state  # callable(connected, info)
+        self._participant   = sanitize_participant(participant)
 
         self._sock = None
         self._sock_lock = threading.Lock()
@@ -186,6 +203,9 @@ class _TriggerSender:
                         auth_denied = True
                         self._on_log(*M.auth_denied())
                     raise OSError("authentication failed")
+                # Declare the participant BEFORE the sync, so the first row
+                # Windows logs already carries it. Best-effort.
+                self._send_session(sock)
                 # Round-trip clock sync before any STATE traffic. Best-effort.
                 self._time_sync(sock)
                 sock.settimeout(None)
@@ -219,6 +239,19 @@ class _TriggerSender:
                            TRIGGER_RECONNECT_MAX_SEC)
             if self._stop_event.wait(timeout=wait):
                 break
+
+    def _send_session(self, sock):
+        """Tell Windows which participant this connection is for, so it can
+        stamp the study code on the time-sync rows it writes. One-way and
+        best-effort — a failure here must not cost us the trigger link."""
+        participant = self._participant
+        try:
+            sock.sendall(f"{PREFIX_SESSION}{participant}\n".encode("utf-8"))
+        except OSError as exc:
+            self._on_log(*M.participant_send_failed(str(exc)))
+            return
+        self._on_log(*(M.participant_sent(participant) if participant
+                       else M.participant_missing()))
 
     def _time_sync(self, sock):
         """Round-trip clock sync with the Windows receiver. Windows computes
@@ -280,6 +313,9 @@ class MonitorWorker:
         self._trigger_host = None
         self._trigger_port = None
         self._trigger_token = None
+        # Study code for this session; sent to Windows on connect so it can
+        # stamp the time-sync log rows with it.
+        self._participant = ""
 
         self._thr_loc = [DEFAULT_LOC_THR] * 3
         self._thr_ang = [DEFAULT_ANG_THR] * 3
@@ -321,13 +357,15 @@ class MonitorWorker:
 
     # ── Setters (call from UI thread) ────────────────────────────────────────
 
-    def configure(self, filepath, trigger_host, trigger_port, trigger_token):
+    def configure(self, filepath, trigger_host, trigger_port, trigger_token,
+                  participant=""):
         """Set the inputs collected in Setup. Call before start()."""
         with self._lock:
             self._filepath      = filepath
             self._trigger_host  = trigger_host
             self._trigger_port  = trigger_port
             self._trigger_token = trigger_token
+            self._participant   = sanitize_participant(participant)
 
     def set_target(self, name):
         """Manually pin the active target by exact name. Turns auto-follow
@@ -420,6 +458,7 @@ class MonitorWorker:
             host     = self._trigger_host
             port     = self._trigger_port
             token    = self._trigger_token
+            who      = self._participant
         if not filepath:
             self._dispatch(self.on_status_message, M.ALERT,
                            "Cannot start: file path not set")
@@ -432,7 +471,7 @@ class MonitorWorker:
 
         self._stop_event.clear()
         self._trigger_sender = _TriggerSender(
-            host=host, port=port, token=token,
+            host=host, port=port, token=token, participant=who,
             on_log=lambda lvl, msg: self._dispatch(
                 self.on_status_message, lvl, msg),
             on_link_state=lambda conn, info: self._dispatch(

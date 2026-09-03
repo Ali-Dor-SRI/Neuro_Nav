@@ -152,10 +152,20 @@ def main():
         else:
             _log("Mac disconnected; awaiting new connection")
 
-    def on_timesync(offset, delay, peer_str):
+    def on_timesync(offset, delay, peer_str, participant):
         sign = "ahead of" if offset >= 0 else "behind"
-        _log(f"Clock offset: Windows is {abs(offset) * 1000.0:.1f} ms {sign} the Mac "
-             f"(delta {offset:+.6f} s, rtt {delay * 1000.0:.2f} ms)")
+        who  = f" for {participant}" if participant else ""
+        _log(f"Clock offset{who}: Windows is {abs(offset) * 1000.0:.1f} ms {sign} "
+             f"the Mac (delta {offset:+.6f} s, rtt {delay * 1000.0:.2f} ms)")
+
+    def on_participant(participant):
+        # Echo it prominently: this is the QTrack operator's chance to catch a
+        # wrong participant before the session's data is logged under it.
+        if participant:
+            _log(f"===> PARTICIPANT: {participant}  "
+                 f"(stamped on this session's time-sync rows)")
+        else:
+            _log("===> PARTICIPANT: none supplied - time-sync rows will be unlabelled")
 
     receiver = TriggerReceiver(
         token         = token,
@@ -163,6 +173,7 @@ def main():
         on_state      = on_state,
         on_peer_change= on_peer_change,
         on_timesync   = on_timesync,
+        on_participant= on_participant,
         on_log        = _log,
     )
     receiver.start()
