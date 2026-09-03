@@ -209,7 +209,7 @@ console instead. The receiver echoes the id it received so the QTrack operator
 can still check it:
 
 ```
-[10:25:41] ===> PARTICIPANT: SNBR-000  (stamped on this session's time-sync rows)
+[10:25:41] Session: SNBR-000
 ```
 
 **Use the study code, never a name.** The log is a plain text file on the
@@ -282,7 +282,7 @@ capped at 64 characters.
 It is entered on the Mac rather than the Windows receiver on purpose: the
 receiver types `ss` into whatever window has focus, so typing on that machine
 mid-session could swallow a keystroke meant for QTrack. The receiver echoes the
-id to its console (`===> PARTICIPANT: …`) so the QTrack operator can still
+id to its console (`Session: …`) so the QTrack operator can still
 verify it.
 
 **Time-sync (round-trip, once right after the SESSION line, before any STATE traffic):**

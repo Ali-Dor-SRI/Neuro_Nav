@@ -159,13 +159,12 @@ def main():
              f"the Mac (delta {offset:+.6f} s, rtt {delay * 1000.0:.2f} ms)")
 
     def on_participant(participant):
-        # Echo it prominently: this is the QTrack operator's chance to catch a
-        # wrong participant before the session's data is logged under it.
+        # Echo it: this is the QTrack operator's chance to catch a wrong
+        # participant before the session's data is logged under it.
         if participant:
-            _log(f"===> PARTICIPANT: {participant}  "
-                 f"(stamped on this session's time-sync rows)")
+            _log(f"Session: {participant}")
         else:
-            _log("===> PARTICIPANT: none supplied - time-sync rows will be unlabelled")
+            _log("Session: (none supplied - time-sync rows will be unlabelled)")
 
     receiver = TriggerReceiver(
         token         = token,

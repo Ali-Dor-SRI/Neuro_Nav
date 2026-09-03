@@ -223,13 +223,12 @@ class TriggerReceiver:
         with self._lock:
             previous = self._participant
             self._participant = participant
-        if not participant:
-            self._on_log("Participant: (none supplied by the Mac)")
-        elif previous and previous != participant:
-            self._on_log(f"Participant changed: {previous!r} -> {participant!r} "
+        # The id itself is announced by on_participant (main.py owns the
+        # wording); only the change case gets its own line, since a mid-session
+        # switch is worth calling out separately.
+        if previous and previous != participant:
+            self._on_log(f"Session changed: {previous!r} -> {participant!r} "
                          f"(applies to time-sync rows logged from now on)")
-        else:
-            self._on_log(f"Participant: {participant}")
         self._on_participant(participant)
 
     # ── time-sync ─────────────────────────────────────────────────────────────

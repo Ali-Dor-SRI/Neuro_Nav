@@ -24,7 +24,7 @@ records whose session it belongs to.
   tab-separated, so an unsanitized paste would corrupt both.
 - **Windows receiver** (`windows/server.py`, `windows/main.py`): holds the id
   for the life of the connection (cleared on connect/disconnect), stamps it on
-  each logged row, echoes `===> PARTICIPANT: …` to the console so the QTrack
+  each logged row, echoes `Session: …` to the console so the QTrack
   operator can verify it, and exposes it via `on_participant` /
   `on_timesync(..., participant)`.
 - **Log format** (`common/timesync.py`): `participant` added as the **last**
