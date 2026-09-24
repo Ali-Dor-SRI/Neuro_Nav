@@ -112,7 +112,7 @@ it and turns auto-follow off.
 
 | | CLI | GUI |
 |---|---|---|
-| Entry | [`python/alert_brainsight_v2.5.0.py`](python/alert_brainsight_v2.5.0.py) | [`python/brainsight_gui/`](python/brainsight_gui/) (`python3 -m brainsight_gui`) |
+| Entry | [`python/alert_brainsight_v2.6.0.py`](python/alert_brainsight_v2.6.0.py) | [`python/brainsight_gui/`](python/brainsight_gui/) (`python3 -m brainsight_gui`) |
 | Control | Interactive REPL (`set target`, `set loc 30 40 50`, `status`, `quit`) | Two-panel wizard: **Setup** (participant + file + IP/port/token) → **Perform** (dropdowns, sliders, colour-coded log) |
 | Windows link | Optional — omit `--trigger-to` for a terminal-only monitor | **Required** — the GUI won't start without IP/port/token |
 
@@ -150,14 +150,21 @@ four digits off the Windows console and type them into the Mac once a week.
 once per connection, right after auth. It's the NTP round-trip:
 `offset = ((t2−t1) + (t3−t4)) / 2`, which cancels network transit time.
 `offset = Windows_clock − Mac_clock`, so **`windows_time = mac_time + offset`**.
-Every result is appended to `time_sync_log.txt`. This is what later makes the
+Every result is written as **one file per connection**, named for the moment it
+connected and the participant it declared
+(`time_sync_2026-09-10_09-14-22_SNBR-000.txt`), created on that connection's
+first sync. **Where they go is the operator's call** — the receiver asks at
+startup (or takes `--log-dir`) and remembers the answer in
+`receiver_settings.json`, so the logs can land straight on the lab share; the
+built-in `time_sync_logs/` next to the .exe is the default and the fallback
+when that folder is unreachable at write time. This is what later makes the
 offline analysis possible at all — it's best-effort, and a failure never aborts
 the trigger link.
 
 **Participant** — the study code is typed on the **Mac** (GUI Setup field, or
 `--participant` on the CLI) and sent as `SESSION:<id>` immediately after auth,
-before the first `TIME:`. Windows stamps it on every row it writes to
-`time_sync_log.txt` (last column), so each offset says whose session it is. It
+before the first `TIME:`. Windows stamps it on every row it writes (last
+column) and in the log file's name, so each offset says whose session it is. It
 lives on the Mac end because the receiver types `ss` into the focused window —
 typing on that machine mid-session could swallow a trigger meant for QTrack.
 
@@ -248,8 +255,9 @@ peak-to-peak) and latency from sheet **`L`** (col 2, milliseconds), joined on
 elapsed time. The timezone is hard-coded `America/Toronto`.
 
 **Where the clock offset comes from.** `CLOCK_OFFSET_SEC` is the
-`Windows − Mac` delta measured by the live trigger link and appended to
-`time_sync_log.txt` (§4) — currently copied into the `INPUTS` block by hand.
+`Windows − Mac` delta measured by the live trigger link and written to that
+connection's file in `time_sync_logs/` (§4) — currently copied into the
+`INPUTS` block by hand.
 `R/sync_mep_times.R` is the earlier standalone version that reads that log
 itself and picks the sync row nearest the QtracS launch; it's the reference for
 what the number means and where to find it.
@@ -332,13 +340,24 @@ out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df,
                  neuronav = NEURONAV_PATH, sample = "Sample 1")
 ```
 
-All five arguments are per-session and none has a default. `sample` is the
-reference the deltas are measured from — under the default `sample_average`
-mode it anchors the averaged target pose, and takes an event name, a timestamp,
-or a frame number. `new_df` needs an elapsed-time column in decimal minutes
-(default `Time`),
-taken to be **the pulse itself** — no latency is subtracted, since there's no
-recorded response to work back from. Every other column rides through
+All five arguments are per-session and none has a default. `diff` is the clock
+offset in **seconds, `Windows − Mac`** — the same quantity as the pipeline's
+`CLOCK_OFFSET_SEC` (Stage 1), read off the receiver's time-sync log for that
+connection. Positive means the Windows clock runs ahead, so it is **subtracted**
+to land on the Mac/neuronav clock:
+
+```r
+mep$trigger_time <- launch_dt + dminutes(elapsed) - dseconds(diff)
+```
+
+Get the sign backwards and every MEP lands at the wrong coil frame by twice the
+offset, which usually shows up as an implausible `match_gap_s` or an empty
+overlap rather than an error. `sample` is the reference the deltas are measured
+from — under the default `sample_average` mode it anchors the averaged target
+pose, and takes an event name, a timestamp, or a frame number. `new_df` needs
+an elapsed-time column in decimal minutes (default `Time`), taken to be **the
+pulse itself** — no latency is subtracted, since there's no recorded response
+to work back from. Every other column rides through
 untouched, and the returned tibble gains `trigger_time`, `coil`,
 `trans_dist_mm`, `ang_dist_deg`, and `match_gap_s`. There's no window filter:
 all rows are used, minus those further than `max_gap_s` (default 0.10 s) from a
@@ -371,13 +390,13 @@ cd python && python3 -m brainsight_gui
 **Mac — CLI, terminal-only (no Windows machine needed):**
 
 ```bash
-python3 python/alert_brainsight_v2.5.0.py "path/to/Streamed Info.txt"
+python3 python/alert_brainsight_v2.6.0.py "path/to/Streamed Info.txt"
 ```
 
 **Mac — CLI, with triggering:**
 
 ```bash
-python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
+python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
 ```
 
 **Check a session file is actually being written:**
@@ -411,7 +430,7 @@ Both bundles are self-contained — lab machines need no Python.
 ## 7. Conventions and gotchas
 
 - **Versioned filenames, not branches.** `alert_brainsight_v1.py` →
-  `v2.5.0.py`; old versions are kept on purpose. **The highest number is the
+  `v2.6.0.py`; old versions are kept on purpose. **The highest number is the
   current one.** The GUI tracks the latest CLI's logic instead of carrying its
   own version.
 - **The Mac side is stdlib-only** (`parse_brainsight.py` aside, which needs
@@ -422,8 +441,9 @@ Both bundles are self-contained — lab machines need no Python.
   the two copies together.** Only the Windows receiver has a dependency
   (`pyautogui`).
 - **Nothing with subject data is tracked.** `.gitignore` excludes `data/`, all
-  `*.csv`, `data_analysis/output/`, the token files, `config.json`, and
-  `time_sync_log.txt`. Session exports live in the lab data store.
+  `*.csv`, `data_analysis/output/`, the token files, `config.json`,
+  `receiver_settings.json`, and `time_sync_logs/`. Session exports live in the
+  lab data store.
 - **Open `Neuro_Nav.Rproj` before running R** — but note the `data_analysis/`
   scripts hard-code **absolute** paths (`Y:/Neuro_Nav_App/...` for the repo,
   `Y:/Merged Data/...` for the Qtrac exports). They run as-is only on the lab
@@ -432,7 +452,7 @@ Both bundles are self-contained — lab machines need no Python.
 - **Docs to cross-check:** [`CLAUDE.md`](CLAUDE.md) is the deepest reference but
   still describes an `R/` directory at the repo root — those helpers now live in
   [`data_analysis/R/`](data_analysis/R/). [`README.md`](README.md) still names
-  v2.2.0 as the CLI entry point; v2.5.0 is current.
+  v2.2.0 as the CLI entry point; v2.6.0 is current.
   [`trigger_app_AJ/README.md`](trigger_app_AJ/README.md) is the authority on the
   wire protocol and troubleshooting; [`CHANGELOG.md`](CHANGELOG.md) records what
   each version added.
@@ -442,7 +462,7 @@ Both bundles are self-contained — lab machines need no Python.
 | To understand… | Read |
 |---|---|
 | The file format everything depends on | [`python/parse_brainsight.py`](python/parse_brainsight.py) — the `SCHEMAS` dict is the whole spec |
-| The live drift logic, end to end | [`python/alert_brainsight_v2.5.0.py`](python/alert_brainsight_v2.5.0.py) — `monitor_loop()` is the heart |
+| The live drift logic, end to end | [`python/alert_brainsight_v2.6.0.py`](python/alert_brainsight_v2.6.0.py) — `monitor_loop()` is the heart |
 | How the two machines agree on time | [`trigger_app_AJ/common/timesync.py`](trigger_app_AJ/common/timesync.py) |
 | How the GUI stays thread-safe | [`python/brainsight_gui/monitor_worker.py`](python/brainsight_gui/monitor_worker.py) — the docstring states the contract |
 | The offline analysis | [`data_analysis/run_analysis.R`](data_analysis/run_analysis.R) — its `INPUTS` block is the whole interface — then the three stage scripts in order |

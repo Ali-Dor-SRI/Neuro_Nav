@@ -26,13 +26,15 @@ Neuro_Nav/
 │   ├── alert_brainsight_v2.2.0.py   + TCP trigger output to Windows receiver
 │   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target
 │   ├── alert_brainsight_v2.4.0.py   + TMS trigger on/off toggle
-│   ├── alert_brainsight_v2.5.0.py   + participant ID on the time-sync log  (current)
+│   ├── alert_brainsight_v2.5.0.py   + participant ID on the time-sync log
+│   ├── alert_brainsight_v2.6.0.py   + auto coil-swap following, stale-pose timeout  (current)
 │   └── brainsight_gui/          Tk GUI wrapping the monitor + trigger sender
 ├── R/                           R scripts — run via RStudio with Neuro_Nav.Rproj open
 │   ├── parse_brainsight.R       Shared parser library (source in other scripts)
 │   ├── explore.R                2D/3D coil trajectory visualization (Session 3)
 │   └── multi_target_explore.R  Multi-target exploration (Session 6)
 ├── data_analysis/              Offline MEP-vs-coil-placement pipeline (see "Data analysis pipeline")
+│   ├── README.md               User guide for lab members — keep in sync with the code
 │   ├── run_analysis.R          Orchestrator — set INPUTS, run
 │   ├── clean_mep_times.R       Stage 1 — MEP ptp + wall-clock trigger_time (QtracP .xlsx/.QLG)
 │   ├── coil_to_sample_delta.R  Stage 2 — coil distance/angle to target (Polaris head-rel / MNI)
@@ -40,10 +42,10 @@ Neuro_Nav/
 │   ├── R/                      parse_brainsight.R (+ explore.R, multi_target_explore.R, sync_mep_times.R)
 │   └── output/                 generated CSV + PNGs
 └── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
-    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.5.0)
+    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.6.0)
     ├── TMS_CrossPlatform_Trigger_System.md
     ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
-    └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_log.txt)
+    └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_logs/)
 ```
 
 ---
@@ -100,23 +102,26 @@ python3 python/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
 Reports file size and growth every 5 s. Useful to confirm a live session
 file is being written before starting more complex tools.
 
-### Drift alert — `python/alert_brainsight_v2.5.0.py`  ← current version
+### Drift alert — `python/alert_brainsight_v2.6.0.py`  ← current version
 
 ```bash
-python3 python/alert_brainsight_v2.5.0.py "data/Session 3  Streamed Info.txt"
-python3 python/alert_brainsight_v2.5.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+python3 python/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt"
+python3 python/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
 
 # Send STATE:RED / STATE:GREEN triggers to the Windows receiver on transitions:
-python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
 
 # Connected for time-sync + distance monitoring, but NO SS triggers to QTrack:
-python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
+python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
 
 # Pin a target manually instead of auto-following the file:
-python3 python/alert_brainsight_v2.5.0.py "<file>" --no-follow
+python3 python/alert_brainsight_v2.6.0.py "<file>" --no-follow
+
+# Pin the crosshairs driver instead of following coil swaps in Brainsight:
+python3 python/alert_brainsight_v2.6.0.py "<file>" --no-coil-follow
 
 # Label the session so Windows stamps the study code on every time-sync row:
-python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --participant SNBR-000
+python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --participant SNBR-000
 ```
 
 **Startup flow:**
@@ -124,7 +129,8 @@ python3 python/alert_brainsight_v2.5.0.py "<file>" --trigger-to 192.168.1.20:505
 2. Scans the file for all `Target Selection` names and `Crosshairs Position`
    driver names. With auto-follow on (default) it adopts the most-recent
    selection; with `--no-follow` it presents a numbered menu to pick one.
-   The driver is always picked from a menu.
+   The driver likewise follows the file's current coil (default) or, with
+   `--no-coil-follow`, is picked from a menu.
 3. Monitors at **2 Hz** (every 0.5 s — 10× slower than the 20 Hz write rate).
 4. Alerts (per-axis: 3 linear + 3 angular DoF) when any DoF drifts beyond
    its threshold; with `--trigger-to`, fires triggers on transitions only.
@@ -148,14 +154,36 @@ monitoring-only, or toggle live with `set trigger on|off`.
 
 **Participant ID** (v2.5.0): `--participant SNBR-000` labels the session. The
 id is sent to the Windows receiver as a `SESSION:` line right after auth and
-**before** the time-sync handshake, and Windows stamps it on every row of
-`time_sync_log.txt` — so each clock offset records whose session it belongs to.
+**before** the time-sync handshake, and Windows stamps it on every time-sync
+row it logs — and in the name of that connection's log file — so each clock
+offset records whose session it belongs to.
 It is entered on the **Mac** by design: the Windows receiver types `ss` into
 whatever window has focus, so typing there mid-session could swallow a trigger
 meant for QTrack (the receiver echoes the id to its console instead). Change it
 live with `set participant <id>`; the new value applies to rows logged from
 then on, so reconnect if you need a fresh row under a corrected id. Use the
 study code, never a name.
+
+**Auto coil-swap following** (v2.6.0): Brainsight only writes `Crosshairs
+Position` rows for the coil currently selected in it, so a coil switch shows
+up in the file as the driver name changing (`Coil A CT` → `Coil B LCT`, as in
+SNBR-157/179/188). With coil-follow on (default) the tracked driver follows
+it: at startup the file's current coil is adopted (no driver menu), and each
+later switch is logged as `[SWAP]`. On a swap the old coil's last pose is
+discarded and, if the state was in range and triggering is on, `STATE:RED` is
+sent — stimulation stops at the swap; the new coil's first on-target pose then
+sends `STATE:GREEN` through the normal transition (already out of range ⇒
+nothing extra is sent). The target is kept — it is an MNI pose, valid for
+either coil. A manual `set driver` **pins** a driver and turns coil-follow
+off; `set coil-follow on` resumes (and switches to the file's coil the same
+way). Start with `--no-coil-follow` for the classic menu-picked, pinned driver.
+
+**Stale-pose timeout** (v2.6.0): if no crosshairs row arrives for the tracked
+driver for **30 s** (`POINTER_STALE_SEC`; coil out of the camera's view), its
+last pose is dropped and drift checks pause (`[LOST]`, then `[FOUND]` when data
+returns). **No trigger is sent** for this — the in/out-of-range state is kept,
+so the first real transition after the coil reappears fires normally. Before
+v2.6.0 the last pose was judged indefinitely.
 
 **Default thresholds:**
 
@@ -172,8 +200,9 @@ pointer's i-th basis vector (frame-free; no Euler convention / gimbal lock).
 ```
 list                  show available targets and drivers (+ follow state)
 set target <n|name>   pin active target (turns auto-follow OFF; resets alert state)
-set driver <n|name>   switch active driver (resets alert state)
+set driver <n|name>   pin active driver (turns coil-follow OFF; resets alert state)
 set follow on|off     toggle auto-follow of the file's target selection
+set coil-follow on|off  toggle following coil swaps made in Brainsight
 set trigger on|off    enable/disable sending SS triggers (monitoring-only when off)
 set participant <id>  study code stamped on the Windows time-sync log rows
 set loc <mm>          linear threshold — scalar (all axes)
@@ -190,13 +219,22 @@ alert and reminder messages fire immediately.
 
 ### Mac GUI — `python/brainsight_gui/` (`python -m brainsight_gui`)
 
-Tk wrapper around the v2.5.0 monitor + trigger sender. Two-step wizard:
+Tk wrapper around the v2.6.0 monitor + trigger sender. Two-step wizard:
 **Setup** (participant ID, file path, Windows IP/port/token, Connect & Start) →
 **Perform** (driver + target dropdowns, per-axis threshold sliders, scrolling log).
 The backend is `monitor_worker.MonitorWorker` (mirrors the CLI logic with
 callbacks instead of `print`/REPL). Auto-follow is exposed as the
 "Auto-follow target selected in the Brainsight file" checkbox; picking from
-the Target dropdown pins a target and unchecks it. The **"Send TMS triggers
+the Target dropdown pins a target and unchecks it. Coil-follow is the
+"Auto-follow coil selected in Brainsight" checkbox under the driver dropdown
+(same pin/uncheck behaviour; same swap and 30 s stale-pose handling as the
+CLI). **GUI-only target prompt:** when a swap is followed and the active target
+hasn't changed in the 30 s before it (`TARGET_CHANGE_LOOKBACK_SEC`), a red
+banner asks the operator to pick the target for the new coil; it clears on any
+target change (dropdown pick — even the same target — or auto-follow) or on
+"Keep current target". Prompt only — trigger behaviour is unchanged. The window
+resizes to any size: panels live in `scroll_frame.ScrollFrame`, which stretches
+them when there's room and scrolls when there isn't. The **"Send TMS triggers
 (SS start/stop to QTrack)"** switch in the Perform panel gates triggering (same
 pure-gate semantics as the CLI's `set trigger`): unchecked keeps the link up
 for time-sync + distance monitoring but sends no `ss` to QTrack. Defaults ON
@@ -245,14 +283,36 @@ Win → Mac:  TIMEOK:<offset> <delay>
 Windows computes the offset itself: `offset = ((t2-t1)+(t3-t4))/2 =
 Windows_clock − Mac_clock` (positive ⇒ Windows ahead), with `delay` the
 round-trip network time. To map a Mac/neuronav timestamp onto the Windows clock:
-**`windows_time = mac_time + offset`**. Each result is appended to
-**`time_sync_log.txt`** (next to the .exe / package, git-ignored): one
-tab-separated row per sync with both machines' local wall-clock times, the
-delta, the round-trip delay, the four raw epochs, and the **participant**
-(v2.5.0 — last column, so logs written before it keep their field positions;
-empty when no id was sent, and a `#` note marks the width change once in an
-existing log). `data_analysis/R/sync_mep_times.R` reads the log and tolerates
-both widths. The `TIMEOK` reply is the
+**`windows_time = mac_time + offset`**. Each result is written as one
+tab-separated row — both machines' local wall-clock times, the delta, the
+round-trip delay, the four raw epochs, and the **participant** (v2.5.0, last
+column; empty when no id was sent).
+
+**One log file per connection.** Every Mac connection gets its own file in the
+log folder, named for the moment it connected and the participant it declared,
+e.g. `time_sync_2026-09-10_09-14-22_SNBR-000.txt`. The file is created on that
+connection's **first successful sync** (a connection that never syncs leaves
+no empty file); same-second collisions get a `-2`, `-3` suffix so an earlier
+file is never appended to.
+
+**The operator chooses the folder** (v2.7.0). The receiver asks at startup,
+offering the folder used last time — Enter accepts it, or paste another (quotes
+from Explorer's "Copy as path", `%VARS%` and `~` are all handled). The choice
+is remembered in `receiver_settings.json` next to the .exe (git-ignored), so a
+lab-share path is typed once. `--log-dir "<folder>"` presets it and skips the
+prompt (for a shortcut); `--no-prompt` keeps the remembered folder without
+asking, as does having no console to ask on (scheduled task / piped stdin), so
+an unattended start never hangs. Default and **fallback** is the built-in
+`time_sync_logs/` next to the .exe: if the chosen folder is unwritable when a
+sync lands (share down, drive not mapped), that connection's file is written
+locally instead and the receiver logs both the reason and where it went — the
+clock offset is never dropped because a share is offline, and triggering is
+unaffected either way. Every file carries the same `#` header and the same
+ten columns the older single `time_sync_log.txt` carried, so a parser written
+for that log reads one of these unchanged.
+`data_analysis/R/sync_mep_times.R` takes either the folder (reads every file,
+pools the rows in time order, adds a `log_file` column) or a single `.txt`
+path, and tolerates the 9-field rows of pre-participant logs. The `TIMEOK` reply is the
 Mac's notification that its timestamp was received and logged (surfaced in the
 CLI log and the GUI log). The whole exchange is **best-effort** — a sync failure
 is logged but never aborts the trigger link. A reconnect re-runs the sync.
@@ -283,6 +343,38 @@ meta       <- tables[["_metadata"]]           # list(Version="7", …)
 Missing row types return a **zero-row data.frame with correct columns**
 (not NULL), so downstream code needs no existence checks.
 
+**Recording summary — `brainsight_info()`**
+
+```r
+brainsight_info("data/BS_Recordings/SNBR-179.txt")   # parses, then summarizes
+brainsight_info(tables)                              # or an already-parsed list
+info <- brainsight_info(path, print = FALSE)         # values only, no printing
+```
+
+Prints the recording length (first to last timestamped row, any row type),
+the trackers used with per-tracker frame counts and visible spans, the coils
+among them, the `Crosshairs Position` drivers, and the samples registered —
+then returns all of it invisibly (`info$duration_s`, `info$coils`,
+`info$trackers`, `info$samples`, …).
+
+**Samples registered** are the `New Sample` rows — name, index, time, MNI
+position and associated target — in the order Brainsight wrote them. This is
+*not* the set of targets selected during the session: a `Target Selection`
+can name a sample registered in an earlier session, and one sample can be
+selected many times over (Session 6: 1 sample registered, 9 selections).
+`max_samples` (default 12) caps how many print; all are returned.
+
+A tracker counts as **used** only if at least one of its frames carries a
+position: Brainsight writes a row for every *configured* tracker on every
+frame whether the camera sees it or not, so row counts alone would report
+pointers and calibration blocks that were never in view (SNBR-179 lists five,
+three were used). The rest are named on a `never visible:` line.
+
+Which trackers are **coils** is convention, not data — the file has no such
+field. The default is `BRAINSIGHT_COILS` (`LCT650`, `CT4661`, matching
+`COIL_CANDIDATES` in `coil_to_sample_delta.R`); pass
+`brainsight_info(path, coils = c(...))` for a session that used something else.
+
 ### explore.R
 
 Loads Session 3. Filters `Polaris Tool` to tracker `LCT650` in MNI space,
@@ -301,6 +393,14 @@ work in progress.
 ---
 
 ## Data analysis pipeline (`data_analysis/`)
+
+> **Keep `data_analysis/README.md` in sync.** It is the user guide for lab
+> members (routes, every argument/setting with its default, examples,
+> troubleshooting). Any change to the pipeline code — `run_analysis.R`, the
+> stage scripts, `join_meps.R`, `qtrac_mep_pipeline.R`, `R/parse_brainsight.R`,
+> `R/sync_mep_times.R` — that adds, removes, renames or re-defaults an
+> argument, changes an output, or changes behaviour must update that README
+> in the same change.
 
 Offline **MEP-vs-coil-placement** analysis: correlate TMS MEP amplitude
 (QtracP) with how far/tilted the coil was from its target (Brainsight
@@ -376,10 +476,10 @@ Extra R deps beyond the list below: `readxl`, `lubridate`, `stringr`.
 
 Python monitoring/alert scripts are versioned in the filename:
 `alert_brainsight_v1.py`, `alert_brainsight_v2.py`,
-`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.5.0.py`.
+`alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.6.0.py`.
 
 Keep old versions in `python/` — do not delete them. The highest version
-number is always the current one (currently **v2.5.0**). The `brainsight_gui/`
+number is always the current one (currently **v2.6.0**). The `brainsight_gui/`
 package tracks the latest CLI version's logic rather than carrying a version
 in its name.
 
