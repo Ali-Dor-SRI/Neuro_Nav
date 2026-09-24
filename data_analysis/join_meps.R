@@ -50,7 +50,8 @@
 #   trigger_time = QLG_launch + Time minutes - diff seconds
 #
 # `diff` is the same quantity as the pipeline's CLOCK_OFFSET_SEC: seconds,
-# Windows - Mac, read off the receiver's time_sync_log.txt. Positive means the
+# Windows - Mac, read off the receiver's time-sync log for that connection
+# (time_sync_logs/time_sync_<date>_<time>_<participant>.txt). Positive means the
 # Windows clock runs ahead, so it is SUBTRACTED to land on the Mac clock.
 #
 # Unlike run_analysis.R there is no elapsed-time window filter -- every row you

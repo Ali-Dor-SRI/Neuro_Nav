@@ -3,6 +3,9 @@
 Listens for an authenticated Mac connection, types `ss`+Enter into the
 focused window on every STATE change. Logs to stdout. Ctrl+C to quit.
 
+On startup it asks where the time-sync logs should be saved, offering the
+folder used last time (Enter accepts it). `--log-dir` answers that in advance.
+
 Usage:
     python -m trigger_app_AJ.windows.main
     python -m trigger_app_AJ.windows.main --port 5050
@@ -10,6 +13,8 @@ Usage:
     python -m trigger_app_AJ.windows.main --token 1234       # set a specific token (persisted)
     python -m trigger_app_AJ.windows.main --show-token        # print on-disk token and exit
     python -m trigger_app_AJ.windows.main --no-keystroke      # dry-run / debug
+    python -m trigger_app_AJ.windows.main --log-dir "Y:/Merged Data/time_sync_logs"
+    python -m trigger_app_AJ.windows.main --no-prompt         # keep the remembered folder, don't ask
 """
 
 if __name__ == "__main__" and __package__ in (None, ""):
@@ -18,7 +23,9 @@ if __name__ == "__main__" and __package__ in (None, ""):
         os.path.abspath(__file__)))))
 
 import argparse
+import os
 import signal
+import sys
 import threading
 from datetime import datetime
 
@@ -27,12 +34,16 @@ from trigger_app_AJ.common.config import (
     current_token,
     get_local_ips,
     is_expired,
+    normalize_dir,
     regenerate_token,
+    save_log_dir,
     save_token,
+    saved_log_dir,
     seconds_until_rotation,
+    settings_path,
     token_path,
 )
-from trigger_app_AJ.common.timesync import timesync_log_path
+from trigger_app_AJ.common.timesync import default_log_dir
 from trigger_app_AJ.windows import qtrack
 from trigger_app_AJ.windows.server import TriggerReceiver
 
@@ -40,6 +51,29 @@ from trigger_app_AJ.windows.server import TriggerReceiver
 def _log(message):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {message}", flush=True)
+
+
+def _prompt_log_dir(default_dir):
+    """Ask where the time-sync logs should be saved; Enter keeps `default_dir`.
+
+    Returns the chosen folder. A blank answer, no console to ask on (stdin
+    piped, started by a service/scheduled task) or Ctrl+C at the prompt all
+    keep `default_dir` — starting the receiver must never hinge on someone
+    being there to answer.
+    """
+    print("  Where should the time-sync logs be saved?")
+    print(f"    [Enter] = {default_dir}")
+    if not sys.stdin or not sys.stdin.isatty():
+        print("    (no console to type into - using the folder above)")
+        print()
+        return default_dir
+    try:
+        typed = input("    > ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default_dir
+    print()
+    return normalize_dir(typed) or default_dir
 
 
 def _rotation_note(issued_at):
@@ -67,6 +101,15 @@ def main():
                              "the focused window. Useful for testing.")
     parser.add_argument("--show-token", action="store_true",
                         help="Print the on-disk token and exit.")
+    parser.add_argument("--log-dir", default=None, metavar="PATH",
+                        help="Folder to save the time-sync logs in (one .txt "
+                             "per Mac connection). Skips the startup prompt "
+                             "and is remembered for next launch. Defaults to "
+                             "the folder used last time.")
+    parser.add_argument("--no-prompt", action="store_true",
+                        help="Don't ask where to save the time-sync logs — use "
+                             "the remembered folder. For shortcuts and "
+                             "unattended starts.")
     args = parser.parse_args()
 
     if args.show_token:
@@ -87,6 +130,28 @@ def main():
         token, issued_at = regenerate_token()
     else:
         token, issued_at, _rotated = current_token()
+
+    # ── Resolve where the time-sync logs go ───────────────────────────────────
+    # Priority: --log-dir, else ask (pre-filled with the folder used last time,
+    # else the built-in one), else -- with --no-prompt or no console -- that
+    # same remembered folder. Whatever is chosen is remembered for next launch.
+    builtin_log_dir = default_log_dir()
+    print()
+    if args.log_dir:
+        log_dir = normalize_dir(args.log_dir) or builtin_log_dir
+    else:
+        remembered = saved_log_dir() or builtin_log_dir
+        log_dir = remembered if args.no_prompt else _prompt_log_dir(remembered)
+    remembered_ok = save_log_dir(log_dir)
+
+    # Create it now so a typo shows up before a session rather than during one.
+    # A failure is a warning, not a stop: the receiver's job is to trigger the
+    # TMS, and an unreachable share falls back to the built-in folder per sync.
+    log_dir_problem = None
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError as exc:
+        log_dir_problem = str(exc)
 
     # ── Detect LAN IPs ────────────────────────────────────────────────────────
     ips = get_local_ips()
@@ -113,6 +178,17 @@ def main():
     else:
         print(f"                 (fixed via --token; no weekly rotation)")
     print()
+    print("  Time-sync logs (one .txt per Mac connection):")
+    print(f"    {log_dir}{os.sep}")
+    if log_dir_problem:
+        print(f"    WARNING: this folder is not writable right now - {log_dir_problem}")
+        print( "             If it is still unreachable when a sync arrives, that")
+        print(f"             file goes to {builtin_log_dir}{os.sep} instead.")
+    elif log_dir != builtin_log_dir:
+        print(f"    (falls back to {builtin_log_dir}{os.sep} if this folder is unreachable)")
+    if not remembered_ok:
+        print("    NOTE: could not save this choice - it will need re-entering next launch.")
+    print()
     if args.no_keystroke:
         print("  Mode: DRY-RUN - STATE changes are logged but no keystrokes are sent.")
         print()
@@ -130,8 +206,12 @@ def main():
     print("    3. Make sure both machines are on the same Wi-Fi / network")
     print("  If the Mac says 'AUTH:DENIED':")
     print("    The token does not match - re-enter the Token shown above exactly.")
-    print(f"  Token is saved at: {token_path()}")
-    print(f"  Time-sync log:     {timesync_log_path()}")
+    print("  If the time-sync logs are not where you expect:")
+    print("    They go to the folder shown above, one file per connection,")
+    print("    named for its start time and participant. Change it with the")
+    print("    startup prompt or --log-dir \"<folder>\".")
+    print(f"  Token is saved at:    {token_path()}")
+    print(f"  Log folder saved at:  {settings_path()}")
     print("============================================================")
     print()
 
@@ -159,22 +239,23 @@ def main():
              f"the Mac (delta {offset:+.6f} s, rtt {delay * 1000.0:.2f} ms)")
 
     def on_participant(participant):
-        # Echo it prominently: this is the QTrack operator's chance to catch a
-        # wrong participant before the session's data is logged under it.
+        # Echo it: this is the QTrack operator's chance to catch a wrong
+        # participant before the session's data is logged under it.
         if participant:
-            _log(f"===> PARTICIPANT: {participant}  "
-                 f"(stamped on this session's time-sync rows)")
+            _log(f"Session: {participant}")
         else:
-            _log("===> PARTICIPANT: none supplied - time-sync rows will be unlabelled")
+            _log("Session: (none supplied - time-sync rows will be unlabelled)")
 
     receiver = TriggerReceiver(
-        token         = token,
-        port          = args.port,
-        on_state      = on_state,
-        on_peer_change= on_peer_change,
-        on_timesync   = on_timesync,
-        on_participant= on_participant,
-        on_log        = _log,
+        token            = token,
+        port             = args.port,
+        on_state         = on_state,
+        on_peer_change   = on_peer_change,
+        on_timesync      = on_timesync,
+        on_participant   = on_participant,
+        on_log           = _log,
+        timesync_log_dir = log_dir,
+        fallback_log_dir = builtin_log_dir,
     )
     receiver.start()
 

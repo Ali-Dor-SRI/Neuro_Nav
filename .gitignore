@@ -51,8 +51,16 @@ windows_token.txt
 *.token
 config.json
 
-# Time-sync log written by the Windows receiver (per-install runtime data).
+# Windows receiver's operator settings (where the time-sync logs are saved).
+# Per-install runtime state, and the path can name a lab share.
+receiver_settings.json
+
+# Time-sync logs written by the Windows receiver (per-install runtime data).
+# One file per Mac connection, in time_sync_logs/; time_sync_log.txt is the
+# older single shared log. Both carry session times and participant codes.
+time_sync_logs/
 time_sync_log.txt
+time_sync_*.txt
 
 # ─── Subject / session data ────────────────────────────────────────────────
 # Brainsight session exports can contain subject identifiers and are large.

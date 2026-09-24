@@ -11,6 +11,7 @@ caller (main.py) just polls callbacks.
 """
 
 import hmac
+import os
 import socket
 import threading
 import time
@@ -38,7 +39,8 @@ class TriggerReceiver:
 
     def __init__(self, token, port=DEFAULT_PORT,
                  on_state=None, on_peer_change=None, on_timesync=None,
-                 on_participant=None, on_log=None, timesync_log_path=None):
+                 on_participant=None, on_log=None, timesync_log_dir=None,
+                 fallback_log_dir=None):
         self.token = token
         self.port  = port
         self._on_state         = on_state         or (lambda *a, **kw: None)
@@ -46,7 +48,10 @@ class TriggerReceiver:
         self._on_timesync      = on_timesync      or (lambda *a, **kw: None)
         self._on_participant   = on_participant   or (lambda *a, **kw: None)
         self._on_log           = on_log           or (lambda *a, **kw: None)
-        self._timesync_log_path = timesync_log_path or timesync.timesync_log_path()
+        # Where the operator asked for the logs, and the always-local folder
+        # used instead if that one is unreachable when a sync lands.
+        self._timesync_log_dir  = timesync_log_dir  or timesync.default_log_dir()
+        self._fallback_log_dir  = fallback_log_dir or timesync.default_log_dir()
 
         self._server_socket = None
         self._peer_socket   = None
@@ -54,6 +59,8 @@ class TriggerReceiver:
         self._last_state    = None
         self._ts_pending    = None   # (t1, t2, t3) between TIME and TIMESYNC
         self._participant   = ""     # study code from the current connection's SESSION line
+        self._conn_started  = None   # epoch the current connection authenticated
+        self._log_path      = None   # this connection's time-sync file (created on 1st sync)
         self._lock          = threading.Lock()
         self.running        = False
 
@@ -149,6 +156,11 @@ class TriggerReceiver:
             # The participant belongs to the connection that sent it; a new Mac
             # connection re-declares it (or leaves it blank).
             self._participant = ""
+            # Each connection logs its time-sync to its own file, named after
+            # the moment it authenticated. The file is created on the first
+            # sync, so a connection that never syncs leaves nothing behind.
+            self._conn_started = time.time()
+            self._log_path     = None
         if old is not None:
             self._on_log("Replacing previous Mac connection")
             _close(old)
@@ -181,6 +193,8 @@ class TriggerReceiver:
                     self._last_state   = None
                     self._ts_pending   = None
                     self._participant  = ""
+                    self._conn_started = None
+                    self._log_path     = None
             if still_current:
                 self._on_log("Mac disconnected")
                 self._on_peer_change(False, None)
@@ -223,13 +237,12 @@ class TriggerReceiver:
         with self._lock:
             previous = self._participant
             self._participant = participant
-        if not participant:
-            self._on_log("Participant: (none supplied by the Mac)")
-        elif previous and previous != participant:
-            self._on_log(f"Participant changed: {previous!r} -> {participant!r} "
+        # The id itself is announced by on_participant (main.py owns the
+        # wording); only the change case gets its own line, since a mid-session
+        # switch is worth calling out separately.
+        if previous and previous != participant:
+            self._on_log(f"Session changed: {previous!r} -> {participant!r} "
                          f"(applies to time-sync rows logged from now on)")
-        else:
-            self._on_log(f"Participant: {participant}")
         self._on_participant(participant)
 
     # ── time-sync ─────────────────────────────────────────────────────────────
@@ -253,9 +266,42 @@ class TriggerReceiver:
             return
         self._on_log("Time-sync: received Mac timestamp - acknowledged")
 
+    def _write_sync_row(self, path, started_at, participant, row):
+        """Write one time-sync row to this connection's log file.
+
+        `path` is the file this connection already owns, or None on its first
+        sync (then one is named in the operator's chosen folder). Returns
+        (path, is_new, fallback_reason): `is_new` says a file was created by
+        this call, and `fallback_reason` is None on a clean write or the error
+        text explaining why the built-in folder was used instead.
+
+        The clock offset is the one thing the offline analysis cannot be
+        reconstructed without, so an unreachable chosen folder (a lab share
+        that is down, a drive letter that did not map) must not lose it: the
+        row is rewritten into the always-local fallback folder as a new file —
+        an unreachable file cannot be appended to, so the connection's later
+        syncs continue there too. Raises OSError only if that fails as well.
+        """
+        try:
+            is_new = path is None
+            if is_new:
+                path = timesync.new_log_path(started_at, participant,
+                                             self._timesync_log_dir)
+            timesync.append_log(path, *row)
+            return path, is_new, None
+        except OSError as exc:
+            if os.path.abspath(self._timesync_log_dir) == \
+                    os.path.abspath(self._fallback_log_dir):
+                raise          # the fallback IS the chosen folder; nowhere left
+            path = timesync.new_log_path(started_at, participant,
+                                         self._fallback_log_dir)
+            timesync.append_log(path, *row)
+            return path, True, str(exc)
+
     def _handle_timesync(self, sock, line):
         """Mac sent TIMESYNC:<t1> <t4>. Compute the offset against our own
-        t2/t3, append it to the log, and reply TIMEOK:<offset> <delay>."""
+        t2/t3, write it to this connection's log file, and reply
+        TIMEOK:<offset> <delay>."""
         try:
             _t1, t4 = proto.parse_floats_after(line, proto.PREFIX_TIMESYNC, 2)
         except ValueError:
@@ -266,6 +312,8 @@ class TriggerReceiver:
             self._ts_pending = None
             peer = self._peer_address
             participant = self._participant
+            path = self._log_path
+            started_at = self._conn_started
         if pending is None:
             self._on_log("Time-sync: TIMESYNC with no prior TIME — ignored")
             return
@@ -274,11 +322,28 @@ class TriggerReceiver:
         peer_str = f"{peer[0]}:{peer[1]}" if peer else "?"
         who = participant or "(no participant)"
         try:
-            path = timesync.append_log(offset, delay, t1, t2, t3, t4, peer_str,
-                                       participant, self._timesync_log_path)
+            path, is_new, fallback_reason = self._write_sync_row(
+                path, started_at, participant,
+                (offset, delay, t1, t2, t3, t4, peer_str, participant))
+            with self._lock:
+                # Only if we are still the live connection — a Mac that was
+                # bumped mid-sync still finishes writing its own file, but
+                # must not stamp its path onto the connection that replaced it.
+                if self._peer_socket is sock:
+                    self._log_path = path
+            if fallback_reason is not None:
+                self._on_log(
+                    f"Time-sync: cannot write to the chosen log folder "
+                    f"({self._timesync_log_dir}): {fallback_reason}")
+                self._on_log(
+                    "Time-sync: wrote to the built-in folder instead - copy it "
+                    "to the share afterwards, and check the folder in the "
+                    "startup prompt (or --log-dir) for the next session.")
+            verb = "new log file" if is_new else "appended to"
             self._on_log(
                 f"Time-sync: delta = {offset:+.6f} s (Windows - Mac), "
-                f"rtt {delay * 1000.0:.2f} ms - logged for {who} to {path}")
+                f"rtt {delay * 1000.0:.2f} ms - logged for {who} "
+                f"({verb}: {path})")
         except OSError as exc:
             self._on_log(f"Time-sync: log write failed: {exc}")
         try:

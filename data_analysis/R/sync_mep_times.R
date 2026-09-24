@@ -4,7 +4,7 @@
 # Build a Mac-clock-synced MEP table from three data-collection files:
 #   * QtracS run log (.QLG)        -> session start wall-clock (the anchor t0)
 #   * QtracP export  (.xlsx, "P")  -> elapsed-time (min) + MEP amplitude
-#   * Neuro_Nav time-sync log      -> delta_s (Windows_clock - Mac_clock)
+#   * Neuro_Nav time-sync logs     -> delta_s (Windows_clock - Mac_clock)
 #
 # Pipeline (per MEP sample):
 #   windows_time = t0(QtracS launch) + elapsed_minutes
@@ -18,7 +18,11 @@
 # ---- CONFIG (edit these) --------------------------------------------
 QLG_PATH          <- "Y:/Merged Data/Data/TSTC60622B.QLG"
 XLSX_PATH         <- "Y:/Merged Data/xlsx Data/TSTC60622B.xlsx"
-TIMESYNC_LOG_PATH <- "X:/temp_files/Ali_testing/time_sync_log.txt"
+# The receiver writes ONE FILE PER CONNECTION into a time_sync_logs/ folder.
+# Point this at that folder (every time_sync*.txt inside is read and pooled);
+# a single .txt file still works too -- one connection's file, or a shared
+# pre-per-connection log.
+TIMESYNC_LOG_PATH <- "X:/temp_files/Ali_testing/time_sync_logs"
 
 XLSX_SHEET        <- "P"   # sheet holding elapsed-time + MEP (sheet "P")
 ELAPSED_COL       <- 1     # 1st column = Elapsed Time (minutes, decimal)
@@ -44,27 +48,50 @@ options(digits.secs = 3)   # show milliseconds when printing POSIXct
 
 # ---- helpers --------------------------------------------------------
 
-# Parse the time-sync log (tab-separated, '#'-commented header).
+# Parse the time-sync log(s) (tab-separated, '#'-commented header).
 # Columns: win_local_time, delta_s, rtt_ms, mac_local_time, peer, t1..t4,
 #          participant  (10th column, added later -- rows written before it
 #          exists have only 9 fields, so rows are split by hand rather than
 #          with read.table, which needs a rectangular table).
+#
+# `path` may be a FOLDER of per-connection logs (one file per Mac connection --
+# what the receiver writes now) or a single .txt file (one connection's file
+# picked by hand, or an older shared log). Every file carries the same header
+# and columns, so pooling them row-wise gives exactly the old single-file
+# table, plus a `log_file` column naming the connection each row came from.
 read_timesync <- function(path) {
-  raw  <- readLines(path, warn = FALSE)
-  rows <- raw[!grepl("^\\s*#", raw) & nzchar(trimws(raw))]
-  if (length(rows) == 0L) stop("No data rows in time-sync log: ", path)
-  f     <- strsplit(rows, "\t", fixed = TRUE)
-  field <- function(i) vapply(f, function(x) if (length(x) >= i) x[[i]] else NA_character_,
-                              character(1))
-  tibble(
-    win_local_time = ymd_hms(field(1), tz = TZ),
-    delta_s        = as.numeric(field(2)),
-    mac_local_time = ymd_hms(field(4), tz = TZ),
-    # NA when the row predates the participant column AND when the operator
-    # supplied no id (a trailing empty field is not split out) -- both mean
-    # "this sync was not labelled".
-    participant    = field(10)
-  )
+  files <- if (dir.exists(path)) {
+    sort(list.files(path, pattern = "^time_sync.*[.]txt$", full.names = TRUE))
+  } else {
+    path
+  }
+  if (length(files) == 0L) stop("No time-sync log files found in: ", path)
+
+  read_one <- function(file) {
+    raw  <- readLines(file, warn = FALSE)
+    rows <- raw[!grepl("^\\s*#", raw) & nzchar(trimws(raw))]
+    if (length(rows) == 0L) return(NULL)   # header-only file: nothing logged
+    fields    <- strsplit(rows, "\t", fixed = TRUE)
+    field <- function(i) vapply(fields,
+                                function(x) if (length(x) >= i) x[[i]] else NA_character_,
+                                character(1))
+    tibble(
+      win_local_time = ymd_hms(field(1), tz = TZ),
+      delta_s        = as.numeric(field(2)),
+      mac_local_time = ymd_hms(field(4), tz = TZ),
+      # NA when the row predates the participant column AND when the operator
+      # supplied no id (a trailing empty field is not split out) -- both mean
+      # "this sync was not labelled".
+      participant    = field(10),
+      log_file       = basename(file)
+    )
+  }
+
+  ts <- bind_rows(lapply(files, read_one))
+  if (nrow(ts) == 0L) stop("No data rows in time-sync log(s): ", path)
+  # Chronological, so "first"/"last" below mean what they meant when every
+  # sync was appended to one file.
+  arrange(ts, win_local_time)
 }
 
 # Grab the QtracS launch time-of-day from the first timestamped QLG line,
@@ -124,6 +151,9 @@ synced <- mep_tbl %>%
 # ---- report ---------------------------------------------------------
 message(sprintf("Time-sync: row %d/%d  delta_s = %+.6f s (Windows - Mac)  |  session %s",
                 row_i, nrow(ts), delta_s, format(session_date)))
+message(sprintf("  from %s  (participant: %s)", ts$log_file[row_i],
+                ifelse(is.na(ts$participant[row_i]) || !nzchar(ts$participant[row_i]),
+                       "unlabelled", ts$participant[row_i])))
 message(sprintf("QtracS launch anchor (Windows clock): %s  (anchor offset %+g s)",
                 format(launch_dt, "%Y-%m-%d %H:%M:%OS3"), ANCHOR_OFFSET_SEC))
 message(sprintf("MEP samples synced: %d", nrow(synced)))

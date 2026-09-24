@@ -110,6 +110,63 @@ def save_token(token):
     return _write_record(token, _now())
 
 
+# ── Operator settings (not secrets) ───────────────────────────────────────────
+# Currently just where the time-sync logs are written. Kept in its own file so
+# tms_token.json stays a single-purpose secret store, and so a lab share path
+# typed once survives restarts (the receiver often runs for days).
+
+SETTINGS_FILENAME = "receiver_settings.json"
+
+
+def settings_path():
+    return os.path.join(app_dir(), SETTINGS_FILENAME)
+
+
+def normalize_dir(path):
+    """Clean up a folder path typed or pasted into the console.
+
+    Windows Explorer's "Copy as path" wraps the path in double quotes and
+    operators paste with stray whitespace, so both are stripped; %VARS% and ~
+    are expanded so either shell's idiom works. Returns "" for blank input.
+    """
+    text = str(path or "").strip().strip('"').strip("'").strip()
+    if not text:
+        return ""
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(text)))
+
+
+def _read_settings():
+    """The settings dict, or {} if the file is missing/unreadable/corrupt."""
+    try:
+        with open(settings_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def saved_log_dir():
+    """Time-sync log folder remembered from the last run ("" if none)."""
+    return normalize_dir(_read_settings().get("log_dir", ""))
+
+
+def save_log_dir(path):
+    """Remember `path` as the time-sync log folder for the next launch.
+
+    Best-effort: returns True if it was written, False if the settings file
+    could not be saved (a read-only install directory, say). Not being able to
+    remember the choice must never stop the receiver from running with it.
+    """
+    data = _read_settings()
+    data["log_dir"] = normalize_dir(path)
+    try:
+        with open(settings_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return True
+    except OSError:
+        return False
+
+
 def get_local_ips():
     """Return a list of LAN IPs the receiver is reachable at.
 

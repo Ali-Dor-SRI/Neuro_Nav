@@ -8,8 +8,9 @@ Adds (v2.4.0 -> v2.5.0):
   - Participant ID. The study code for the session is entered HERE, on the Mac,
     and travels to the Windows receiver over the existing trigger link
     (`SESSION:<id>`, sent right after auth and before the time-sync handshake).
-    Windows stamps it on every row it writes to `time_sync_log.txt`, so each
-    clock-offset record says which participant it belongs to.
+    Windows stamps it on every time-sync row it writes (and in the name of
+    that connection's log file), so each clock-offset record says which
+    participant it belongs to.
       * `--participant SNBR-000` sets it at launch.
       * `set participant <id>` updates it live (e.g. to fix a typo); the new
         value applies to time-sync rows logged from then on, not to ones
@@ -1022,7 +1023,7 @@ def main():
     parser.add_argument("--participant", default="", metavar="ID",
                         help="Participant / study code (e.g. SNBR-000) for this "
                              "session. Sent to the Windows receiver, which stamps "
-                             "it on every row of time_sync_log.txt. Use the study "
+                             "it on the time-sync rows it logs. Use the study "
                              "code, never a name. Change it live with "
                              "'set participant <id>'.")
     args = parser.parse_args()

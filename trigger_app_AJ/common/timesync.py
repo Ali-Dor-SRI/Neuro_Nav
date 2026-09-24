@@ -1,4 +1,4 @@
-"""Clock-offset maths and the Windows-side time-sync log.
+"""Clock-offset maths and the Windows-side time-sync logs.
 
 The Mac (running Brainsight / neuronav) and the Windows machine (running
 QTrack for TMS/EMG) keep independent clocks. Each writes wall-clock
@@ -7,7 +7,7 @@ recordings you need to know how far apart the two clocks are.
 
 When the trigger link is established the two devices exchange timestamps
 NTP-style (see protocol.py). Windows computes the offset between the clocks
-and appends it here. ``offset = Windows_clock - Mac_clock`` (positive means
+and writes it here. ``offset = Windows_clock - Mac_clock`` (positive means
 the Windows clock is ahead of the Mac clock), so to convert a Mac/neuronav
 timestamp to the Windows/TMS clock:
 
@@ -15,39 +15,96 @@ timestamp to the Windows/TMS clock:
 
 The round-trip exchange cancels most of the network transit time, so the
 offset is not biased by how long the message took to travel.
+
+**One file per connection.** Each Mac connection gets its own log file in
+``time_sync_logs/``, named for the connection's start time and the
+participant it declared, e.g.::
+
+    time_sync_logs/time_sync_2026-09-10_14-33-07_SNBR-000.txt
+
+Each file carries the same header and columns the single shared log used to
+carry, so anything that parsed the old log parses one of these unchanged --
+it just reads a directory of them instead of one growing file. A file is
+created lazily, on the connection's first logged sync, so a connection that
+never syncs leaves no empty file behind.
+
+**Where they go is the operator's choice** -- ``--log-dir`` or the receiver's
+startup prompt, remembered in ``receiver_settings.json``. ``default_log_dir()``
+below is only the built-in location: the starting default, and the fallback the
+receiver writes to if the chosen folder (typically a lab share) is unreachable
+when a sync arrives.
 """
 
 import os
+import re
 from datetime import datetime
 
 from trigger_app_AJ.common.config import app_dir
 
-TIMESYNC_LOG_FILENAME = "time_sync_log.txt"
+TIMESYNC_LOG_DIRNAME = "time_sync_logs"
+TIMESYNC_LOG_PREFIX  = "time_sync"
 
 _HEADER = (
-    "# Neuro_Nav time-sync log\n"
+    "# Neuro_Nav time-sync log - ONE FILE PER MAC CONNECTION.\n"
     "# delta_s = Windows_clock - Mac_clock  (positive => Windows clock is AHEAD of Mac).\n"
     "# To map a Mac/neuronav timestamp onto the Windows/TMS-EMG clock:  windows = mac + delta_s\n"
     "# rtt_ms is the round-trip network delay (already removed from delta_s).\n"
     "# participant is the study code typed into the Mac app for this session\n"
-    "#   (empty if the operator did not supply one). It is the LAST column so\n"
-    "#   that logs written before it existed keep their column positions.\n"
+    "#   (empty if the operator did not supply one).\n"
     "# Tab-separated columns:\n"
     "# win_local_time\tdelta_s\trtt_ms\tmac_local_time\tpeer"
     "\tt1_mac_epoch\tt2_win_epoch\tt3_win_epoch\tt4_mac_epoch\tparticipant\n"
 )
 
-# Written once when appending to a log created before the participant column
-# existed, so a human reading the file can see why the row width changed.
-_MIGRATION_NOTE = (
-    "# --- 'participant' appended as a 10th column from the next row on ---\n"
-)
+# Anything outside this set is squashed to '-' in the filename's participant
+# segment, so a pasted id can never escape into a path or break the shell.
+_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_FILENAME_ID_MAX = 40
 
 
-def timesync_log_path():
-    """Path to the time-sync log — next to the .exe when frozen, else the
-    trigger_app_AJ/ directory (same convention as the token file)."""
-    return os.path.join(app_dir(), TIMESYNC_LOG_FILENAME)
+def default_log_dir():
+    """Built-in location for the per-connection time-sync logs - next to the
+    .exe when frozen, else the trigger_app_AJ/ directory (same convention as
+    the token file).
+
+    This is where logs go until the operator chooses somewhere else, and where
+    they go anyway if that choice turns out to be unwritable at the moment a
+    sync lands. It is always on the local machine, so it cannot go offline.
+    """
+    return os.path.join(app_dir(), TIMESYNC_LOG_DIRNAME)
+
+
+def _filename_participant(participant):
+    """Participant id reduced to a filename-safe segment ("" if unusable)."""
+    slug = _FILENAME_UNSAFE.sub("-", str(participant or "")).strip("-._")
+    return slug[:_FILENAME_ID_MAX].strip("-._")
+
+
+def new_log_path(started_at=None, participant="", directory=None):
+    """Path for a fresh per-connection log, and create its directory.
+
+    `started_at` is the connection's start epoch (defaults to now) and names
+    the file; `participant` is appended when the Mac supplied one, so the
+    folder can be scanned by eye. The file itself is NOT created -- the first
+    `append_log()` writes it, header included.
+
+    If a file of that name already exists (two connections within the same
+    second), `-2`, `-3`, ... is appended so an earlier connection's log is
+    never appended to or overwritten.
+    """
+    directory = directory or timesync_log_dir()
+    os.makedirs(directory, exist_ok=True)
+    stamp = datetime.fromtimestamp(
+        started_at if started_at is not None else datetime.now().timestamp()
+    ).strftime("%Y-%m-%d_%H-%M-%S")
+    who  = _filename_participant(participant)
+    base = f"{TIMESYNC_LOG_PREFIX}_{stamp}" + (f"_{who}" if who else "")
+    path = os.path.join(directory, base + ".txt")
+    n = 2
+    while os.path.exists(path):
+        path = os.path.join(directory, f"{base}-{n}.txt")
+        n += 1
+    return path
 
 
 def compute_offset(t1, t2, t3, t4):
@@ -71,35 +128,25 @@ def _fmt_local(epoch):
     return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
-def _is_pre_participant_log(path):
-    """True for an existing, non-empty log whose header predates the
-    participant column — so the note explaining the extra field is written
-    exactly once. Only the '#' header lines are inspected, so a participant id
-    that happens to contain the word can never be mistaken for the header."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            head = f.read(4096)
-    except OSError:
-        return False
-    if not head.strip():
-        return False
-    return not any("participant" in ln
-                   for ln in head.splitlines() if ln.startswith("#"))
+def append_log(path, offset, delay, t1, t2, t3, t4, peer, participant=""):
+    """Write one time-sync result as a line to this connection's log file.
 
-
-def append_log(offset, delay, t1, t2, t3, t4, peer, participant="", path=None):
-    """Append one time-sync result as a line to the log file.
+    `path` comes from `new_log_path()` and belongs to exactly one connection.
+    The column header is written first if the file is new/empty, so the very
+    first sync of a connection creates a complete, self-describing file. A
+    connection that syncs more than once (a re-sync on the same link) appends
+    to the same file.
 
     `participant` is the study code the Mac sent for this session ("" if the
-    operator supplied none). It is written LAST so that the positions of the
-    original nine columns are unchanged for anything already parsing the log.
+    operator supplied none), written as the last column.
 
-    Writes the column header first if the file is new/empty. Returns the path
-    written to. Raises OSError on write failure (caller decides how loud).
+    Returns the path written to. Raises OSError on write failure (caller
+    decides how loud).
     """
-    path = path or timesync_log_path()
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     need_header = (not os.path.exists(path)) or os.path.getsize(path) == 0
-    need_note   = (not need_header) and _is_pre_participant_log(path)
     row = "\t".join((
         _fmt_local(t2),            # Windows local time the sync landed
         f"{offset:+.6f}",          # delta_s (Windows - Mac)
@@ -112,7 +159,5 @@ def append_log(offset, delay, t1, t2, t3, t4, peer, participant="", path=None):
     with open(path, "a", encoding="utf-8") as f:
         if need_header:
             f.write(_HEADER)
-        elif need_note:
-            f.write(_MIGRATION_NOTE)
         f.write(row + "\n")
     return path
