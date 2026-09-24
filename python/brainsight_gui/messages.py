@@ -94,6 +94,48 @@ def triggers_disabled():
 def driver_adopted(name):
     return OK, f"Crosshairs driver adopted: {name}"
 
+def driver_pinned(name):
+    return INFO, f"Crosshairs driver pinned to: {name} (coil-follow off)"
+
+def coil_follow_enabled():
+    return INFO, ("Coil-follow ON — tracking the coil currently selected in "
+                  "Brainsight")
+
+def coil_follow_disabled():
+    return INFO, "Coil-follow OFF — crosshairs driver pinned manually"
+
+def coil_swapped(old, new):
+    return WARN, f"Coil switched in Brainsight: {old} → {new} — now tracking {new}"
+
+def coil_swap_stopped(new):
+    return ALERT, f"Coil swap — stopped stimulation until {new} is on target"
+
+def coil_swap_already_out(new):
+    return WARN, (f"Coil swap — already outside threshold; stimulation stays "
+                  f"stopped until {new} is on target")
+
+def target_prompt(coil, target):
+    return ALERT, (f"Coil switched to {coil} but the target was not changed — "
+                   f"still measuring against '{target}'. Select the target for "
+                   f"{coil} (here or in Brainsight), or click Keep current "
+                   f"target")
+
+def target_kept(coil, target):
+    return INFO, f"Keeping target '{target}' for {coil} (confirmed by operator)"
+
+def waiting_for_coil(name):
+    return INFO, f"Waiting for {name} crosshairs data"
+
+def coil_lost(name, seconds):
+    return WARN, (f"{name} not visible — no crosshairs data for {seconds:.0f} s; "
+                  f"drift checks paused (no trigger sent)")
+
+def coil_still_lost(name):
+    return WARN, f"{name} still not visible — drift checks paused"
+
+def coil_found(name):
+    return OK, f"{name} visible again — drift checks resumed"
+
 def in_range(d_xyz, t_xyz):
     return OK, (f"Within threshold (all 6 DoF OK) — "
                 f"loc=({d_xyz[0]:.1f}, {d_xyz[1]:.1f}, {d_xyz[2]:.1f}) mm  "

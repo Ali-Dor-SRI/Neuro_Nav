@@ -1,6 +1,6 @@
 """Threaded backend for the Brainsight GUI.
 
-Mirrors the polling + trigger logic of `alert_brainsight_v2.2.0.py` but
+Mirrors the polling + trigger logic of `alert_brainsight_v2.6.0.py` but
 exposes it as a class with callbacks instead of `print()` and the input
 REPL. UI code never touches sockets or files directly — it talks to
 MonitorWorker, MonitorWorker talks back via callbacks dispatched onto
@@ -27,6 +27,15 @@ from brainsight_gui import messages as M
 POLL_HZ          = 2
 POLL_INTERVAL    = 1.0 / POLL_HZ
 STATUS_INTERVAL  = 5.0           # rate-limit repeated "waiting…" messages
+
+# Drop the tracked driver's last pose (pause drift checks) when no crosshairs
+# row has arrived for it for this long — the coil is out of the camera's view.
+POINTER_STALE_SEC = 30.0
+
+# A coil swap with no target change in the app within this many seconds
+# BEFORE it prompts the operator to pick the target for the new coil. (A
+# change AFTER the swap simply clears the prompt.)
+TARGET_CHANGE_LOOKBACK_SEC = 30.0
 
 COORD_SYS        = "MNI"
 
@@ -302,6 +311,7 @@ class MonitorWorker:
         on_drivers_changed(list_of_names: list[str], active_name: str | None)
         on_link_state(connected: bool, info: str)
         on_thresholds_changed(loc_vec3: list[float], ang_vec3: list[float])
+        on_target_prompt_changed()   -- read get_target_prompt() for the state
     """
 
     def __init__(self, ui_dispatch):
@@ -333,6 +343,21 @@ class MonitorWorker:
         self._auto_follow        = True
         self._last_selected_name = None     # most-recent file selection seen
 
+        # Coil-follow: when True, the active driver tracks the driver named on
+        # the most recent Crosshairs Position row — Brainsight only writes rows
+        # for the coil selected in it, so this follows a coil swap. A manual
+        # pick (set_driver) turns it off.
+        self._coil_follow      = True
+        self._last_driver_seen = None       # most-recent driver in the file
+        self._swap_pending     = None       # (old, new) for the poll loop
+
+        # Target prompt: a coil swap with no recent target change leaves the
+        # new coil measured against the old coil's target, so the operator is
+        # asked to pick one. Holds (coil, target) while the prompt is up;
+        # cleared by any change of the active target or by keep_target().
+        self._target_changed_at = None      # monotonic time of last change
+        self._target_prompt     = None
+
         # TMS triggering gate: when False, STATE:RED/GREEN are NOT sent to the
         # Windows receiver, so no SS keystrokes reach QTrack. Time-sync and
         # distance monitoring continue regardless. Pure gate — toggling never
@@ -353,7 +378,37 @@ class MonitorWorker:
         self.on_link_state          = lambda connected, info: None
         self.on_thresholds_changed  = lambda loc, ang: None
         self.on_follow_changed      = lambda enabled: None
+        self.on_coil_follow_changed = lambda enabled: None
         self.on_triggers_changed    = lambda enabled: None
+        self.on_target_prompt_changed = lambda: None
+
+    # ── Target prompt ────────────────────────────────────────────────────────
+
+    def get_target_prompt(self):
+        """(coil, target) while the operator is being asked to pick a target
+        for a newly swapped-in coil, else None. The UI reads this when
+        on_target_prompt_changed fires, so it always shows the latest state
+        whichever thread changed it."""
+        with self._lock:
+            return self._target_prompt
+
+    def keep_target(self):
+        """Operator confirmed the current target is right for the new coil."""
+        with self._lock:
+            prompt = self._target_prompt
+            self._target_prompt = None
+        if prompt is not None:
+            self._dispatch(self.on_status_message, *M.target_kept(*prompt))
+            self._dispatch(self.on_target_prompt_changed)
+
+    def _note_target_change_locked(self):
+        """Record that the active target just changed (caller holds the lock).
+        Returns True if that cleared an open prompt — the caller then fires
+        on_target_prompt_changed once the lock is released."""
+        self._target_changed_at = time.monotonic()
+        cleared = self._target_prompt is not None
+        self._target_prompt = None
+        return cleared
 
     # ── Setters (call from UI thread) ────────────────────────────────────────
 
@@ -370,13 +425,15 @@ class MonitorWorker:
     def set_target(self, name):
         """Manually pin the active target by exact name. Turns auto-follow
         OFF so the file's selections no longer override the operator's pick.
-        No-op if not in the pool."""
+        No-op if not in the pool. Re-picking the current target counts as a
+        target change, so it answers an open target prompt."""
         with self._lock:
             if name in self._all_targets:
                 self._active_target_name = name
                 self._active_target      = self._all_targets[name]
                 self._auto_follow        = False
                 self._reset_requested    = True
+                prompt_cleared = self._note_target_change_locked()
                 changed = True
             else:
                 changed = False
@@ -385,6 +442,8 @@ class MonitorWorker:
                            f"Target pinned to: {name} (auto-follow off)")
             self._dispatch(self.on_follow_changed, False)
             self._emit_targets()
+            if prompt_cleared:
+                self._dispatch(self.on_target_prompt_changed)
 
     def set_auto_follow(self, enabled):
         """Enable/disable auto-follow. When enabling, immediately jump to the
@@ -393,12 +452,14 @@ class MonitorWorker:
         with self._lock:
             self._auto_follow = enabled
             followed = None
+            prompt_cleared = False
             if (enabled and self._last_selected_name is not None
                     and self._last_selected_name in self._all_targets
                     and self._active_target_name != self._last_selected_name):
                 self._active_target_name = self._last_selected_name
                 self._active_target      = self._all_targets[self._last_selected_name]
                 self._reset_requested    = True
+                prompt_cleared = self._note_target_change_locked()
                 followed = self._last_selected_name
         self._dispatch(self.on_status_message,
                        *(M.follow_enabled() if enabled else M.follow_disabled()))
@@ -406,6 +467,8 @@ class MonitorWorker:
             self._dispatch(self.on_status_message, *M.target_followed(followed))
         self._dispatch(self.on_follow_changed, enabled)
         self._emit_targets()
+        if prompt_cleared:
+            self._dispatch(self.on_target_prompt_changed)
 
     def set_triggers_enabled(self, enabled):
         """Enable/disable sending TMS triggers (STATE:RED/GREEN → SS keystrokes
@@ -420,17 +483,38 @@ class MonitorWorker:
         self._dispatch(self.on_triggers_changed, enabled)
 
     def set_driver(self, name):
+        """Manually pin the crosshairs driver. Turns coil-follow OFF so a coil
+        swap in Brainsight no longer overrides the operator's pick."""
         with self._lock:
             if name in self._all_drivers:
                 self._active_driver_name = name
+                self._coil_follow        = False
+                self._swap_pending       = None
                 self._reset_requested    = True
                 changed = True
             else:
                 changed = False
         if changed:
-            self._dispatch(self.on_status_message, M.INFO,
-                           f"Crosshairs driver set to: {name}")
+            self._dispatch(self.on_status_message, *M.driver_pinned(name))
+            self._dispatch(self.on_coil_follow_changed, False)
             self._emit_drivers()
+
+    def set_coil_follow(self, enabled):
+        """Enable/disable coil-follow. When enabling, switch to the coil the
+        file is currently on (handled by the poll loop exactly like a swap
+        seen in the file)."""
+        enabled = bool(enabled)
+        with self._lock:
+            self._coil_follow = enabled
+            if (enabled and self._last_driver_seen is not None
+                    and self._active_driver_name is not None
+                    and self._active_driver_name != self._last_driver_seen):
+                self._swap_pending = (self._active_driver_name,
+                                      self._last_driver_seen)
+        self._dispatch(self.on_status_message,
+                       *(M.coil_follow_enabled() if enabled
+                         else M.coil_follow_disabled()))
+        self._dispatch(self.on_coil_follow_changed, enabled)
 
     def set_linear_threshold(self, vec3):
         with self._lock:
@@ -470,6 +554,10 @@ class MonitorWorker:
             return False
 
         self._stop_event.clear()
+        with self._lock:
+            self._swap_pending  = None
+            self._target_prompt = None
+        self._dispatch(self.on_target_prompt_changed)
         self._trigger_sender = _TriggerSender(
             host=host, port=port, token=token, participant=who,
             on_log=lambda lvl, msg: self._dispatch(
@@ -496,6 +584,8 @@ class MonitorWorker:
     def _poll_loop(self):
         file_pos      = 0
         last_pointer  = None
+        last_pointer_at = 0.0       # monotonic time last_pointer was refreshed
+        pointer_lost  = False       # stale-pose timeout hit; "not visible" shown
         in_exceedance = False
         checks_over   = 0
         last_status_time = 0.0
@@ -503,6 +593,7 @@ class MonitorWorker:
 
         while not self._stop_event.is_set():
             loop_start = time.monotonic()
+            batch_pointers = {}     # driver -> latest MNI crosshairs pose
 
             with self._lock:
                 do_reset = self._reset_requested
@@ -512,6 +603,7 @@ class MonitorWorker:
 
             if do_reset:
                 last_pointer = None
+                pointer_lost  = False
                 in_exceedance = False
                 checks_over   = 0
 
@@ -537,14 +629,51 @@ class MonitorWorker:
                         fh.seek(file_pos)
                         new_lines = fh.readlines()
                         file_pos = fh.tell()
-                    pointer_from_batch = self._consume_lines(new_lines)
-                    if pointer_from_batch is not None:
-                        last_pointer = pointer_from_batch
+                    batch_pointers = self._consume_lines(new_lines)
                 except OSError as exc:
                     self._dispatch(self.on_status_message, M.WARN,
                                    f"Read error: {exc}")
 
-            # ── 2. Evaluate ──────────────────────────────────────────────────
+            # ── 2. Apply a coil swap (from the file or set_coil_follow) ─────
+            with self._lock:
+                swap = self._swap_pending
+                self._swap_pending = None
+                prompt = None
+                if swap is not None:
+                    self._active_driver_name = swap[1]
+                    # The target stays put across a swap. Unless it was just
+                    # changed (e.g. the operator picked the new coil's target
+                    # first), ask whether it is still the right one.
+                    target = self._active_target_name
+                    since  = (None if self._target_changed_at is None
+                              else time.monotonic() - self._target_changed_at)
+                    if target is not None and (
+                            since is None or since > TARGET_CHANGE_LOOKBACK_SEC):
+                        prompt = self._target_prompt = (swap[1], target)
+                swap_triggers = self._triggers_enabled
+            if swap is not None:
+                old, new = swap
+                self._dispatch(self.on_status_message, *M.coil_swapped(old, new))
+                if prompt is not None:
+                    self._dispatch(self.on_status_message, *M.target_prompt(*prompt))
+                    self._dispatch(self.on_target_prompt_changed)
+                self._emit_drivers()
+                last_pointer = None
+                pointer_lost = False
+                if not in_exceedance:
+                    # Stimulation stops at the swap; the new coil's first
+                    # in-range pose sends GREEN via the normal transition.
+                    in_exceedance = True
+                    checks_over   = 1
+                    self._dispatch(self.on_status_message,
+                                   *M.coil_swap_stopped(new))
+                    if self._trigger_sender is not None and swap_triggers:
+                        self._trigger_sender.send_state(STATE_RED)
+                else:
+                    self._dispatch(self.on_status_message,
+                                   *M.coil_swap_already_out(new))
+
+            # ── 3. Evaluate ──────────────────────────────────────────────────
             with self._lock:
                 cur_target = self._active_target
                 cur_loc    = list(self._thr_loc)
@@ -553,8 +682,26 @@ class MonitorWorker:
                 cur_driver = self._active_driver_name
                 cur_triggers = self._triggers_enabled
 
+            # Refresh / expire the tracked driver's pose.
+            now = time.monotonic()
+            fresh = batch_pointers.get(cur_driver)
+            if fresh is not None:
+                last_pointer    = fresh
+                last_pointer_at = now
+                if pointer_lost:
+                    pointer_lost = False
+                    self._dispatch(self.on_status_message,
+                                   *M.coil_found(cur_driver))
+            elif (last_pointer is not None
+                    and now - last_pointer_at > POINTER_STALE_SEC):
+                # Coil out of view: stop judging an old pose. No trigger is
+                # sent; in_exceedance is kept so the next transition fires.
+                last_pointer = None
+                pointer_lost = True
+                self._dispatch(self.on_status_message,
+                               *M.coil_lost(cur_driver, POINTER_STALE_SEC))
+
             if cur_target is None or cur_driver is None or last_pointer is None:
-                now = time.monotonic()
                 if now - last_status_time >= STATUS_INTERVAL:
                     last_status_time = now
                     if cur_target is None:
@@ -563,6 +710,12 @@ class MonitorWorker:
                     elif cur_driver is None:
                         self._dispatch(self.on_status_message,
                                        *M.waiting_for_driver())
+                    elif pointer_lost:
+                        self._dispatch(self.on_status_message,
+                                       *M.coil_still_lost(cur_driver))
+                    else:
+                        self._dispatch(self.on_status_message,
+                                       *M.waiting_for_coil(cur_driver))
             else:
                 d_xyz = _axis_offsets(cur_target["loc"], last_pointer["loc"])
                 t_xyz = _per_axis_tilts(list(cur_target["mat"]),
@@ -617,39 +770,41 @@ class MonitorWorker:
                                            *M.in_range(d_xyz, t_xyz))
                     checks_over = 0
 
-            # ── 3. Sleep ────────────────────────────────────────────────────
+            # ── 4. Sleep ────────────────────────────────────────────────────
             elapsed = time.monotonic() - loop_start
             self._stop_event.wait(timeout=max(0.0, POLL_INTERVAL - elapsed))
 
     def _consume_lines(self, new_lines):
         """Parse a batch of file lines and update internal state.
 
-        Returns the latest Crosshairs Position dict for the active driver
-        in MNI seen in this batch (or None if no matching row). The poll
-        loop uses that as `last_pointer` for the evaluation step.
+        Returns {driver: latest MNI Crosshairs Position dict} for this batch.
+        The poll loop takes the active driver's entry as `last_pointer` —
+        after applying any coil swap this batch revealed (queued in
+        `_swap_pending`), so a mid-batch swap picks up the new coil's pose.
         """
-        latest_pointer = None
+        batch_pointers = {}
         new_targets = []
         new_drivers = []
         batch_last_target = None    # most-recent Target Selection (MNI) in batch
-
-        with self._lock:
-            cur_driver = self._active_driver_name
+        batch_last_driver = None    # most-recent crosshairs driver in batch
 
         for raw in new_lines:
             parts = raw.rstrip().split("\t")
             row_type = parts[0].strip() if parts else ""
             if row_type == "Crosshairs Position":
-                parsed = _parse_crosshairs_row(parts)
-                if not parsed:
+                driver = parts[3].strip() if len(parts) > 3 else ""
+                if not driver:
                     continue
+                # Brainsight only writes rows for the coil selected in it, so
+                # the name alone says which coil is in use.
+                batch_last_driver = driver
                 with self._lock:
-                    if parsed["driver"] and parsed["driver"] not in self._all_drivers:
-                        self._all_drivers.append(parsed["driver"])
-                        new_drivers.append(parsed["driver"])
-                if (parsed["driver"] == cur_driver
-                        and parsed["coord_system"] == COORD_SYS):
-                    latest_pointer = parsed
+                    if driver not in self._all_drivers:
+                        self._all_drivers.append(driver)
+                        new_drivers.append(driver)
+                parsed = _parse_crosshairs_row(parts)
+                if parsed and parsed["coord_system"] == COORD_SYS:
+                    batch_pointers[driver] = parsed
             elif row_type == "Target Selection":
                 parsed = _parse_target_row(parts)
                 # Null / non-MNI rows (e.g. "<No Selection>") are ignored;
@@ -676,30 +831,49 @@ class MonitorWorker:
                 had_target = self._active_target_name is not None
                 switch = ((self._auto_follow or self._active_target_name is None)
                           and self._active_target_name != batch_last_target)
+                prompt_cleared = False
                 if switch:
                     self._active_target_name = batch_last_target
                     self._active_target      = self._all_targets[batch_last_target]
                     self._reset_requested    = True
+                    # Adopting the first target at startup is not a change —
+                    # it must not suppress a prompt for a swap soon after.
+                    if had_target:
+                        prompt_cleared = self._note_target_change_locked()
             if switch:
                 msg = M.target_followed if had_target else M.target_adopted
                 self._dispatch(self.on_status_message, *msg(batch_last_target))
             self._emit_targets()
+            if prompt_cleared:
+                self._dispatch(self.on_target_prompt_changed)
         elif new_targets:
             self._emit_targets()
 
-        for name in new_drivers:
+        # ── Follow the coil selected in Brainsight ──────────────────────────
+        # The very first driver is adopted outright (the file's current coil
+        # when following, else the first one seen). After that, a different
+        # driver under coil-follow queues a swap for the poll loop, which
+        # owns the alert state it has to update.
+        adopted = None
+        if batch_last_driver is not None:
             with self._lock:
+                self._last_driver_seen = batch_last_driver
                 if self._active_driver_name is None:
-                    self._active_driver_name = name
+                    adopted = (new_drivers[0]
+                               if new_drivers and not self._coil_follow
+                               else batch_last_driver)
+                    self._active_driver_name = adopted
                     self._reset_requested    = True
-                    adopted = True
-                else:
-                    adopted = False
-            if adopted:
-                self._dispatch(self.on_status_message, *M.driver_adopted(name))
+                elif (self._coil_follow
+                        and self._active_driver_name != batch_last_driver):
+                    self._swap_pending = (self._active_driver_name,
+                                          batch_last_driver)
+        if adopted is not None:
+            self._dispatch(self.on_status_message, *M.driver_adopted(adopted))
+        if new_drivers or adopted is not None:
             self._emit_drivers()
 
-        return latest_pointer
+        return batch_pointers
 
     # ── Emitters ─────────────────────────────────────────────────────────────
 

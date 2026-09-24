@@ -10,7 +10,8 @@ Layout:
   │    [Connect & Start]                    ● status      │
   │                                                       │
   │  Module 2 — Perform  (disabled until Setup starts)    │
-  │    [Crosshairs driver dropdown]                       │
+  │    [! coil swapped, target unchanged — banner]        │
+  │    [Crosshairs driver dropdown]  [x] coil-follow      │
   │    [Target dropdown]                                  │
   │    [Linear threshold widget]  [Angular threshold w.]  │
   │    ┌─ Status / messages (scrolling log) ──────────┐   │
@@ -33,6 +34,7 @@ from brainsight_gui.monitor_worker import MonitorWorker
 from brainsight_gui.perform_panel  import (
     PerformPanel, DEFAULT_LOC_THR, DEFAULT_ANG_THR,
 )
+from brainsight_gui.scroll_frame   import ScrollFrame
 from brainsight_gui.setup_panel    import SetupPanel
 from brainsight_gui import config_store
 from brainsight_gui import messages as M
@@ -44,7 +46,11 @@ class App:
         self.root = root
         self.root.title("Brainsight Drift Monitor")
         self.root.geometry("780x720")
-        self.root.minsize(640, 600)
+        # Resizable to any size: no minsize, and the panels live in a scroll
+        # container that scrolls instead of clipping when the window is small.
+        self.root.resizable(True, True)
+        self.body = ScrollFrame(self.root)
+        self.body.pack(fill="both", expand=True)
 
         # UI dispatcher: schedule fn on the Tk main thread
         self._dispatch = lambda fn, *args: self.root.after(0, fn, *args)
@@ -57,20 +63,23 @@ class App:
         # Perform. Their state is preserved across show/hide so Back
         # restores everything intact.
         self.setup = SetupPanel(
-            self.root,
+            self.body.interior,
             on_next  = self._on_setup_next,
             on_cancel= self._on_setup_cancel,
         )
         self.perform = PerformPanel(
-            self.root,
+            self.body.interior,
             on_driver_changed = self._on_driver_changed,
             on_target_changed = self._on_target_changed,
             on_linear_changed = self._on_linear_changed,
             on_angular_changed= self._on_angular_changed,
             on_follow_toggled = self._on_follow_toggled,
+            on_coil_follow_toggled = self._on_coil_follow_toggled,
             on_triggers_toggled = self._on_triggers_toggled,
+            on_keep_target    = self._on_keep_target,
             on_back           = self._on_perform_back,
         )
+        self._prompt_shown = None   # (coil, target) the banner is showing
         # Remembered connection details: prefill Setup from the last
         # successful session, and re-save whenever a connection succeeds.
         self._pending_conn     = None
@@ -91,7 +100,9 @@ class App:
         self.worker.on_link_state         = self._on_link_state
         self.worker.on_thresholds_changed = self._on_thresholds_changed
         self.worker.on_follow_changed     = self._on_follow_changed
+        self.worker.on_coil_follow_changed = self._on_coil_follow_changed
         self.worker.on_triggers_changed   = self._on_triggers_changed
+        self.worker.on_target_prompt_changed = self._on_target_prompt_changed
 
         # Apply default thresholds to the panel
         self.perform.set_linear_threshold([DEFAULT_LOC_THR] * 3)
@@ -172,8 +183,14 @@ class App:
     def _on_follow_toggled(self, enabled):
         self.worker.set_auto_follow(enabled)
 
+    def _on_coil_follow_toggled(self, enabled):
+        self.worker.set_coil_follow(enabled)
+
     def _on_triggers_toggled(self, enabled):
         self.worker.set_triggers_enabled(enabled)
+
+    def _on_keep_target(self):
+        self.worker.keep_target()
 
     # ── Worker -> UI (already on Tk thread; ui_dispatch routed it here) ─────
 
@@ -189,8 +206,24 @@ class App:
     def _on_follow_changed(self, enabled):
         self.perform.set_follow(enabled)
 
+    def _on_coil_follow_changed(self, enabled):
+        self.perform.set_coil_follow(enabled)
+
     def _on_triggers_changed(self, enabled):
         self.perform.set_triggers(enabled)
+
+    def _on_target_prompt_changed(self):
+        # Read the worker's current state rather than an event payload, so
+        # show/clear events racing from two threads can't leave it stale.
+        prompt = self.worker.get_target_prompt()
+        if prompt == self._prompt_shown:
+            return
+        self._prompt_shown = prompt
+        if prompt is None:
+            self.perform.hide_target_prompt()
+        else:
+            self.perform.show_target_prompt(*prompt)
+            self.root.bell()
 
     def _on_link_state(self, connected, info):
         # On the first successful auth, remember the connection details so the

@@ -1,7 +1,7 @@
 """Module 2: Perform panel.
 
 Active controls during a session:
-  * Crosshairs driver dropdown (Combobox)
+  * Crosshairs driver dropdown (Combobox) + coil-follow checkbox
   * Target dropdown (Combobox)
   * Linear threshold widget (mm) -- 0..200, default 40
   * Angular threshold widget (rad) -- 0..1.5708, default 0.20
@@ -13,6 +13,7 @@ is disabled.
 
 from datetime import datetime
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 
 from brainsight_gui import messages as M
@@ -24,6 +25,9 @@ DEFAULT_ANG_THR = 0.20
 LOC_MIN, LOC_MAX = 0.0, 200.0      # mm
 ANG_MIN, ANG_MAX = 0.0, 1.5708     # rad (~90 degrees)
 
+PROMPT_BG = "#fdecea"              # target-prompt banner (alert red on pink)
+PROMPT_FG = "#c0392b"
+
 
 class PerformPanel(ttk.LabelFrame):
 
@@ -33,7 +37,9 @@ class PerformPanel(ttk.LabelFrame):
                  on_linear_changed=None,
                  on_angular_changed=None,
                  on_follow_toggled=None,
+                 on_coil_follow_toggled=None,
                  on_triggers_toggled=None,
+                 on_keep_target=None,
                  on_back=None,
                  **kwargs):
         super().__init__(master, text="Module 2 — Perform", padding=10, **kwargs)
@@ -42,8 +48,10 @@ class PerformPanel(ttk.LabelFrame):
         self._on_linear_changed  = on_linear_changed  or (lambda vec: None)
         self._on_angular_changed = on_angular_changed or (lambda vec: None)
         self._on_follow_toggled  = on_follow_toggled  or (lambda enabled: None)
+        self._on_coil_follow_toggled = on_coil_follow_toggled or (lambda enabled: None)
         self._on_triggers_toggled= on_triggers_toggled or (lambda enabled: None)
-        self._on_back            = on_back            or (lambda: None)
+        self._on_keep_target     = on_keep_target     or (lambda: None)
+        self._on_back           = on_back            or (lambda: None)
 
         self._enabled = False  # Setup must run before this becomes active
         self._build()
@@ -53,7 +61,8 @@ class PerformPanel(ttk.LabelFrame):
 
     def _build(self):
         # ─ Top bar: Back button + link status ─
-        top_bar = ttk.Frame(self); top_bar.pack(fill="x", pady=(0, 8))
+        top_bar = self._top_bar = ttk.Frame(self)
+        top_bar.pack(fill="x", pady=(0, 8))
         self._back_btn = ttk.Button(top_bar, text="← Back", command=self._on_back_clicked)
         self._back_btn.pack(side="left")
         # Who this session is being logged under — read-only here; change it by
@@ -62,6 +71,28 @@ class PerformPanel(ttk.LabelFrame):
         self._participant_label.pack(side="left", padx=(12, 0))
         self._link_status = ttk.Label(top_bar, text="", foreground="#1a7f1a")
         self._link_status.pack(side="right")
+
+        # ─ Target prompt (hidden until a coil swap leaves the target as is) ─
+        # Explicit line breaks rather than wraplength, so the banner's width
+        # never depends on the window's and can't fight the scroll container.
+        self._prompt_frame = tk.Frame(self, background=PROMPT_BG,
+                                      highlightthickness=1,
+                                      highlightbackground=PROMPT_FG,
+                                      padx=10, pady=6)
+        self._prompt_label = tk.Label(self._prompt_frame, text="",
+                                      justify="left", anchor="w",
+                                      background=PROMPT_BG, foreground=PROMPT_FG)
+        bold = tkfont.nametofont("TkDefaultFont").copy()
+        bold.configure(weight="bold")
+        self._prompt_label.configure(font=bold)
+        self._prompt_label.pack(fill="x")
+        prompt_btns = tk.Frame(self._prompt_frame, background=PROMPT_BG)
+        prompt_btns.pack(fill="x", pady=(6, 0))
+        ttk.Button(prompt_btns, text="Keep current target",
+                   command=self._on_keep_target_clicked).pack(side="left")
+        tk.Label(prompt_btns, text="or pick a target from the Target dropdown",
+                 background=PROMPT_BG, foreground=PROMPT_FG).pack(
+                     side="left", padx=(8, 0))
 
         # ─ Dropdowns row ─
         dd_frame = ttk.Frame(self); dd_frame.pack(fill="x", pady=(0, 8))
@@ -74,12 +105,23 @@ class PerformPanel(ttk.LabelFrame):
         self._driver_combo.grid(row=0, column=1, sticky="ew", pady=(0, 4))
         self._driver_combo.bind("<<ComboboxSelected>>", self._on_driver_select)
 
+        # Coil-follow: when checked, the driver tracks the coil selected in
+        # Brainsight (a coil swap switches it). Picking from the dropdown
+        # above pins a driver and clears this automatically.
+        self._coil_follow_var = tk.BooleanVar(value=True)
+        self._coil_follow_check = ttk.Checkbutton(
+            dd_frame,
+            text="Auto-follow coil selected in Brainsight",
+            variable=self._coil_follow_var,
+            command=self._on_coil_follow_toggle)
+        self._coil_follow_check.grid(row=1, column=1, sticky="w", pady=(0, 8))
+
         ttk.Label(dd_frame, text="Target:",
-                  width=18, anchor="e").grid(row=1, column=0, sticky="e", padx=(0,6))
+                  width=18, anchor="e").grid(row=2, column=0, sticky="e", padx=(0,6))
         self._target_var = tk.StringVar()
         self._target_combo = ttk.Combobox(dd_frame, textvariable=self._target_var,
                                            state="readonly", width=32)
-        self._target_combo.grid(row=1, column=1, sticky="ew")
+        self._target_combo.grid(row=2, column=1, sticky="ew")
         self._target_combo.bind("<<ComboboxSelected>>", self._on_target_select)
 
         # Auto-follow: when checked, the active target tracks the most-recently
@@ -91,7 +133,7 @@ class PerformPanel(ttk.LabelFrame):
             text="Auto-follow target selected in the Brainsight file",
             variable=self._follow_var,
             command=self._on_follow_toggle)
-        self._follow_check.grid(row=2, column=1, sticky="w", pady=(4, 0))
+        self._follow_check.grid(row=3, column=1, sticky="w", pady=(4, 0))
 
         dd_frame.columnconfigure(1, weight=1)
 
@@ -131,7 +173,9 @@ class PerformPanel(ttk.LabelFrame):
         # ─ Message log ─
         log_frame = ttk.LabelFrame(self, text="Status / messages", padding=(6, 4))
         log_frame.pack(fill="both", expand=True)
-        self._log = tk.Text(log_frame, height=10, width=80, state="disabled",
+        # Small requested size: the log fills whatever room the window gives
+        # it, and a small request lets the window shrink before it scrolls.
+        self._log = tk.Text(log_frame, height=6, width=40, state="disabled",
                             font=("Menlo", 10), wrap="word", padx=4, pady=2)
         log_scroll = ttk.Scrollbar(log_frame, command=self._log.yview)
         self._log.configure(yscrollcommand=log_scroll.set)
@@ -151,6 +195,7 @@ class PerformPanel(ttk.LabelFrame):
         self._driver_combo.config(state=state)
         self._target_combo.config(state=state)
         self._follow_check.config(state="normal" if enabled else "disabled")
+        self._coil_follow_check.config(state="normal" if enabled else "disabled")
         self._triggers_check.config(state="normal" if enabled else "disabled")
         # ThresholdWidget contains sliders and entries; toggle children
         for child in self._iter_threshold_children():
@@ -193,6 +238,11 @@ class PerformPanel(ttk.LabelFrame):
         won't loop back into the worker."""
         self._follow_var.set(bool(enabled))
 
+    def set_coil_follow(self, enabled):
+        """Reflect the worker's coil-follow state in its checkbox (no
+        callback fires, so this won't loop back into the worker)."""
+        self._coil_follow_var.set(bool(enabled))
+
     def set_triggers(self, enabled):
         """Reflect the worker's trigger-gate state in the checkbox + status
         label. Setting the variable programmatically does NOT fire the command
@@ -210,6 +260,18 @@ class PerformPanel(ttk.LabelFrame):
             self._triggers_status.config(
                 text="○ OFF — monitoring + time-sync only",
                 foreground="#b87515")
+
+    def show_target_prompt(self, coil, target):
+        """Ask the operator to pick the target for a newly swapped-in coil."""
+        self._prompt_label.config(
+            text=(f"Coil changed to {coil}, but the target was not changed.\n"
+                  f"Still measuring against '{target}'. "
+                  f"Is that the right target for {coil}?"))
+        if not self._prompt_frame.winfo_manager():
+            self._prompt_frame.pack(fill="x", pady=(0, 8), after=self._top_bar)
+
+    def hide_target_prompt(self):
+        self._prompt_frame.pack_forget()
 
     def set_linear_threshold(self, vec3):
         self._linear_widget.set(vec3)
@@ -234,6 +296,9 @@ class PerformPanel(ttk.LabelFrame):
     def _on_back_clicked(self):
         self._on_back()
 
+    def _on_keep_target_clicked(self):
+        self._on_keep_target()
+
     def _on_driver_select(self, _evt=None):
         name = self._driver_var.get()
         if name:
@@ -246,6 +311,9 @@ class PerformPanel(ttk.LabelFrame):
 
     def _on_follow_toggle(self):
         self._on_follow_toggled(self._follow_var.get())
+
+    def _on_coil_follow_toggle(self):
+        self._on_coil_follow_toggled(self._coil_follow_var.get())
 
     def _on_triggers_toggle(self):
         # Reflect immediately for snappy feedback; the worker's
