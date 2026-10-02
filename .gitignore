@@ -12,10 +12,10 @@ dist/
 dist_bridge/
 *.spec
 # ...but these build/ subdirs hold the actual build SCRIPTS, not artifacts:
-!trigger_app_AJ/build/
-!trigger_app_AJ/build/**
-!python/brainsight_gui/build/
-!python/brainsight_gui/build/**
+!dev/windows_receiver/build/
+!dev/windows_receiver/build/**
+!dev/mac_gui/build/
+!dev/mac_gui/build/**
 
 # ─── Build outputs (icons, DMGs) ──────────────────────────────────────────
 *.icns
@@ -74,10 +74,11 @@ test/
 !data/.gitkeep
 
 # ─── Analysis outputs ──────────────────────────────────────────────────────
-# data_analysis/ holds version-controlled R scripts; the plots they emit and the
+# analysis/ holds version-controlled R scripts; the plots they emit and the
 # per-participant run outputs are regenerable / contain data, so keep them out.
-data_analysis/*.png
-data_analysis/output/
+analysis/*.png
+analysis/output/
+archive/analysis/*.png
 # CSV outputs carry subject IDs (in the filename) + session dates, event
 # timestamps, and MEP amplitudes. Ignore them anywhere in the tree, not just
 # under output/, so a stray export can never be committed. No .csv is tracked.
@@ -86,8 +87,11 @@ data_analysis/output/
 # ─── Deprecated / preliminary scripts ──────────────────────────────────────
 # explore.R was preliminary exploration and hardcodes a real subject-derived
 # MNI target coordinate. Untracked and kept out of the repo going forward.
-data_analysis/R/explore.R
+archive/analysis/explore.R
 
 # ─── Build artifacts ───────────────────────────────────────────────────────
 *.log
 *.tmp
+
+# Stale PyInstaller leftovers moved out of the way (local only).
+archive/build_artifacts/

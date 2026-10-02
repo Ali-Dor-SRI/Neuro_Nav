@@ -7,6 +7,29 @@ project-wide release tag (`vX.Y.Z`).
 
 ---
 
+## Repository reorganisation — 2026-10-02
+
+The repo is now split into `dev/` (Mac GUI, Windows receiver, shared protocol),
+`analysis/` (R pipeline + Shiny dashboard) and `archive/` (retired code). No
+behaviour changed; paths and import roots did.
+
+- `trigger_app_AJ/common` -> `dev/common`; `trigger_app_AJ/windows` ->
+  `dev/windows_receiver`; `python/brainsight_gui` -> `dev/mac_gui` (package
+  renamed `mac_gui`). Run from `dev/`: `python -m mac_gui`,
+  `python -m windows_receiver.main`. The token file and default
+  `time_sync_logs/` now sit in `dev/` (next to the .exe when frozen, as before).
+- Launchers/builds moved: `launch_receiver.bat` -> `dev/windows_receiver/`,
+  `launch_gui.command` -> `dev/mac_gui/`, build scripts under each package's
+  `build/`; the Windows .exe is built to `dev/dist/`.
+- `data_analysis/` -> `analysis/` (all `data_analysis` path strings updated;
+  data folder paths such as `Y:/...` and `data_paths.json` are unchanged).
+- Archived: all `alert_brainsight_v*.py`, `monitor_brainsight.py`,
+  `daq_trigger_out.py` -> `archive/cli/`; `explore.R`,
+  `multi_target_explore.R`, `sandbox.R` -> `archive/analysis/`; stale
+  `.spec`/`build_intermediate` -> `archive/build_artifacts/`.
+
+---
+
 ## `gui-v0.2.0` — 2026-09-23
 
 ### Added — the GUI asks for a target after a coil swap

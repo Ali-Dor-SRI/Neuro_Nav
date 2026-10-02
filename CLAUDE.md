@@ -1,51 +1,53 @@
 # Neuro_Nav
 
 Real-time processing and visualization of neuronavigation data from
-**Brainsight TMS** sessions. The project is split across Python (real-time
-monitoring tools) and R (offline analysis and visualization).
+**Brainsight TMS** sessions. The project is split across Python (`dev/`: real-time
+monitoring GUI + trigger receiver) and R (`analysis/`: offline analysis and visualization).
 
 ---
 
 ## Directory structure
 
+The repo has three top-level areas: **`dev/`** (the live Mac + Windows system),
+**`analysis/`** (offline R pipeline + dashboard) and **`archive/`** (retired
+code, kept for reference). Raw session data lives on the lab's **UNAS shared
+drive**, not in the repo (a local `data/` folder is git-ignored).
+
 ```
 Neuro_Nav/
 ├── CLAUDE.md
 ├── Neuro_Nav.Rproj              R project root (working directory for all R scripts)
-├── data/                        Raw session exports from Brainsight
-│   ├── Session 3  Streamed Info.txt
-│   └── Session 6_ Streamed Info.txt
-├── launch_gui.command           Double-click launcher for the Mac GUI
-├── python/                      Python tools — run from the project root
-│   ├── parse_brainsight.py      Shared parser library (import in other scripts)
-│   ├── monitor_brainsight.py    Polls a file and reports accessibility every 5 s
-│   ├── alert_brainsight_v1.py   Drift alert tool — v1
-│   ├── alert_brainsight_v2.py   Drift alert tool — v2
-│   ├── alert_brainsight_v2.0.1.py
-│   ├── alert_brainsight_v2.1.0.py   per-axis thresholds
-│   ├── alert_brainsight_v2.2.0.py   + TCP trigger output to Windows receiver
-│   ├── alert_brainsight_v2.3.0.py   + auto-follow of file's target
-│   ├── alert_brainsight_v2.4.0.py   + TMS trigger on/off toggle
-│   ├── alert_brainsight_v2.5.0.py   + participant ID on the time-sync log
-│   ├── alert_brainsight_v2.6.0.py   + auto coil-swap following, stale-pose timeout  (current)
-│   └── brainsight_gui/          Tk GUI wrapping the monitor + trigger sender
-├── R/                           R scripts — run via RStudio with Neuro_Nav.Rproj open
-│   ├── parse_brainsight.R       Shared parser library (source in other scripts)
-│   ├── explore.R                2D/3D coil trajectory visualization (Session 3)
-│   └── multi_target_explore.R  Multi-target exploration (Session 6)
-├── data_analysis/              Offline MEP-vs-coil-placement pipeline (see "Data analysis pipeline")
+├── dev/                         Python import root — run `python -m ...` from here
+│   ├── README.md               Wire protocol + run instructions
+│   ├── requirements.txt
+│   ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
+│   ├── windows_receiver/       TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_logs/)
+│   │   ├── main.py / server.py / qtrack.py
+│   │   ├── launch_receiver.bat Dev-mode launcher
+│   │   └── build/              build_windows.bat (PyInstaller) + icon
+│   ├── mac_gui/                Tk GUI wrapping the drift monitor + trigger sender (`python -m mac_gui`)
+│   │   ├── launch_gui.command  Double-click launcher for the Mac GUI
+│   │   ├── parse_brainsight.py Python parser library (pandas; not imported by the GUI)
+│   │   └── build/              build_mac.sh (PyInstaller .app/.dmg) + icon
+│   └── tools/                  Lab utilities (rsync_script.sh: upload recordings to the shared drive)
+├── analysis/                    Offline MEP-vs-coil-placement pipeline (see "Data analysis pipeline")
 │   ├── README.md               User guide for lab members — keep in sync with the code
 │   ├── run_analysis.R          Orchestrator — set INPUTS, run
 │   ├── clean_mep_times.R       Stage 1 — MEP ptp + wall-clock trigger_time (QtracP .xlsx/.QLG)
 │   ├── coil_to_sample_delta.R  Stage 2 — coil distance/angle to target (Polaris head-rel / MNI)
 │   ├── mep_vs_coil_distance.R  Stage 3 — per-MEP nearest coil pose at trigger_time
-│   ├── R/                      parse_brainsight.R (+ explore.R, multi_target_explore.R, sync_mep_times.R)
-│   └── output/                 generated CSV + PNGs
-└── trigger_app_AJ/              Separate Mac↔Windows TMS trigger app (standalone)
-    ├── README.md               Wire protocol + run instructions (current Mac sender: v2.6.0)
-    ├── TMS_CrossPlatform_Trigger_System.md
-    ├── common/                 Protocol constants + config (port, 4-digit weekly token) + time-sync maths
-    └── windows/                TCP receiver that types `ss`+Enter into QTrack (+ writes time_sync_logs/)
+│   ├── join_meps.R / qtrac_mep_pipeline.R   Routes A/B helpers
+│   ├── R/                      parse_brainsight.R, sync_mep_times.R
+│   ├── offset_study/           Route C — multi-participant 6-DoF coil-offset vs MEP study
+│   │   ├── run_offset_study.R  orchestrator: reads manifest.csv, per-participant + group outputs
+│   │   ├── manifest.csv        one row per participant (xlsx, QLG, Brainsight, time_sync folder)
+│   │   ├── app/app.R           Shiny dashboard; DATA_DIRS_DEFAULT (top of file) = the data folders
+│   │   └── R/                  qtrac_io, coil_geometry, brainsight_targets, pulses, analysis, plots, data_locator
+│   └── output/                 generated CSV + PNGs (offset_study/<id>/ and offset_study/group/)
+└── archive/                     Retired code — not maintained, kept for reference
+    ├── cli/                    Mac CLI: alert_brainsight_v1 … v2.6.0.py, monitor_brainsight.py, daq_trigger_out.py
+    ├── analysis/               Exploratory R scratch (explore.R, multi_target_explore.R, sandbox.R) + stray outputs
+    └── build_artifacts/        Stale PyInstaller .spec files and build_intermediate folders
 ```
 
 ---
@@ -73,12 +75,16 @@ Brainsight exports tab-delimited `.txt` files. Each line starts with a
 
 ---
 
-## Python
+## Python (`dev/` and `archive/cli/`)
 
-### Shared parser — `python/parse_brainsight.py`
+All Python under `dev/` is imported from `dev/` as the root (`cd dev`, then
+`python -m mac_gui` / `python -m windows_receiver.main`). The CLI tools below
+live in `archive/cli/` — **archived**, superseded by the GUI, but still runnable.
+
+### Shared parser — `dev/mac_gui/parse_brainsight.py`
 
 ```python
-from python.parse_brainsight import parse_brainsight
+from mac_gui.parse_brainsight import parse_brainsight   # run from dev/
 
 tables = parse_brainsight("data/Session 3  Streamed Info.txt",
                           drop_null_rows=True)   # drops frames where tracker invisible
@@ -93,35 +99,35 @@ meta       = tables["_metadata"]          # {'Version': '7', 'Created by': 'Brai
 All `(null)` values become `pd.NA`. Numeric columns are cast to `float`.
 `datetime` is a `pandas.Timestamp` (ms precision).
 
-### File monitor — `python/monitor_brainsight.py`
+### File monitor — `archive/cli/monitor_brainsight.py`
 
 ```bash
-python3 python/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
+python3 archive/cli/monitor_brainsight.py "data/Session 3  Streamed Info.txt"
 ```
 
 Reports file size and growth every 5 s. Useful to confirm a live session
 file is being written before starting more complex tools.
 
-### Drift alert — `python/alert_brainsight_v2.6.0.py`  ← current version
+### Drift alert — `archive/cli/alert_brainsight_v2.6.0.py`  ← last CLI version (archived)
 
 ```bash
-python3 python/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt"
-python3 python/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
+python3 archive/cli/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt"
+python3 archive/cli/alert_brainsight_v2.6.0.py "data/Session 3  Streamed Info.txt" --loc 50 --ang 0.3
 
 # Send STATE:RED / STATE:GREEN triggers to the Windows receiver on transitions:
-python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok>
 
 # Connected for time-sync + distance monitoring, but NO SS triggers to QTrack:
-python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --no-triggers
 
 # Pin a target manually instead of auto-following the file:
-python3 python/alert_brainsight_v2.6.0.py "<file>" --no-follow
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --no-follow
 
 # Pin the crosshairs driver instead of following coil swaps in Brainsight:
-python3 python/alert_brainsight_v2.6.0.py "<file>" --no-coil-follow
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --no-coil-follow
 
 # Label the session so Windows stamps the study code on every time-sync row:
-python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --participant SNBR-000
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token <tok> --participant SNBR-000
 ```
 
 **Startup flow:**
@@ -217,7 +223,7 @@ quit                  stop
 Waiting/status messages are **rate-limited to once every 5 s**;
 alert and reminder messages fire immediately.
 
-### Mac GUI — `python/brainsight_gui/` (`python -m brainsight_gui`)
+### Mac GUI — `dev/mac_gui/` (`python -m mac_gui`)
 
 Tk wrapper around the v2.6.0 monitor + trigger sender. Two-step wizard:
 **Setup** (participant ID, file path, Windows IP/port/token, Connect & Start) →
@@ -238,7 +244,7 @@ them when there's room and scrolls when there isn't. The **"Send TMS triggers
 (SS start/stop to QTrack)"** switch in the Perform panel gates triggering (same
 pure-gate semantics as the CLI's `set trigger`): unchecked keeps the link up
 for time-sync + distance monitoring but sends no `ss` to QTrack. Defaults ON
-each launch (not persisted). `launch_gui.command` double-click-launches it on
+each launch (not persisted). `dev/mac_gui/launch_gui.command` double-click-launches it on
 the Mac.
 
 The **Participant ID** is the first Setup field and is **required** — an
@@ -246,13 +252,13 @@ unlabelled time-sync row can't be matched to a participant afterwards. It is
 sent to Windows on connect and shown read-only in the Perform panel's top bar;
 to change it, go Back (which reconnects and writes a freshly labelled row).
 
-`brainsight_gui/config_store.py` persists the Windows IP, port, and token to
+`mac_gui/config_store.py` persists the Windows IP, port, and token to
 `~/Library/Application Support/Neuro_Nav/config.json` after a successful
 connection and prefills them on the next launch (the Brainsight file path and
 the participant ID are not saved — they change per session, and the id is
 participant data).
 
-### Trigger token — `trigger_app_AJ/common/config.py`
+### Trigger token — `dev/common/config.py`
 
 The Mac↔Windows shared secret is a **4-digit numeric code** (`0000`–`9999`)
 that **rotates once a week**. The Windows receiver stores the code and its
@@ -264,7 +270,7 @@ prints the current code. The Mac GUI remembers the code between launches, so
 operators only re-enter it after the weekly rotation. (Both token files and
 `config.json` are git-ignored.)
 
-### Time sync — `trigger_app_AJ/common/timesync.py`
+### Time sync — `dev/common/timesync.py`
 
 So events recorded on the Mac (neuronav/Brainsight) can be lined up with the
 TMS/EMG files recorded on Windows (QTrack), the two clocks are compared **once
@@ -310,7 +316,7 @@ clock offset is never dropped because a share is offline, and triggering is
 unaffected either way. Every file carries the same `#` header and the same
 ten columns the older single `time_sync_log.txt` carried, so a parser written
 for that log reads one of these unchanged.
-`data_analysis/R/sync_mep_times.R` takes either the folder (reads every file,
+`analysis/R/sync_mep_times.R` takes either the folder (reads every file,
 pools the rows in time order, adds a `log_file` column) or a single `.txt`
 path, and tolerates the 9-field rows of pre-participant logs. The `TIMEOK` reply is the
 Mac's notification that its timestamp was received and logged (surfaced in the
@@ -325,10 +331,10 @@ is logged but never aborts the trigger link. A reconnect re-runs the sync.
 This sets the working directory to the project root, which all relative
 paths assume.
 
-### Shared parser — `R/parse_brainsight.R`
+### Shared parser — `analysis/R/parse_brainsight.R`
 
 ```r
-source("R/parse_brainsight.R")
+source("analysis/R/parse_brainsight.R")
 
 tables <- parse_brainsight("data/Session 3  Streamed Info.txt",
                            drop_null_rows = TRUE)
@@ -375,7 +381,7 @@ field. The default is `BRAINSIGHT_COILS` (`LCT650`, `CT4661`, matching
 `COIL_CANDIDATES` in `coil_to_sample_delta.R`); pass
 `brainsight_info(path, coils = c(...))` for a session that used something else.
 
-### explore.R
+### explore.R (archived: `archive/analysis/`)
 
 Loads Session 3. Filters `Polaris Tool` to tracker `LCT650` in MNI space,
 computes distance to Sample 2, identifies the **closest sustained approach**
@@ -385,16 +391,16 @@ using a 200-frame rolling mean (≈ 10 s window), and plots:
   marker (orange ▲)
 - A **3D rotatable plotly** coloured by distance to Sample 2
 
-### multi_target_explore.R
+### multi_target_explore.R (archived: `archive/analysis/`)
 
 Loads Session 6 via `parse_brainsight.R`. Multi-target exploration —
 work in progress.
 
 ---
 
-## Data analysis pipeline (`data_analysis/`)
+## Data analysis pipeline (`analysis/`)
 
-> **Keep `data_analysis/README.md` in sync.** It is the user guide for lab
+> **Keep `analysis/README.md` in sync.** It is the user guide for lab
 > members (routes, every argument/setting with its default, examples,
 > troubleshooting). Any change to the pipeline code — `run_analysis.R`, the
 > stage scripts, `join_meps.R`, `qtrac_mep_pipeline.R`, `R/parse_brainsight.R`,
@@ -404,7 +410,7 @@ work in progress.
 
 Offline **MEP-vs-coil-placement** analysis: correlate TMS MEP amplitude
 (QtracP) with how far/tilted the coil was from its target (Brainsight
-neuronav). Entry point is **`data_analysis/run_analysis.R`** — set its INPUTS
+neuronav). Entry point is **`analysis/run_analysis.R`** — set its INPUTS
 block and run. It drives three stages, reusing their math:
 
 | Stage script              | Builds       | Role                                                        |
@@ -413,7 +419,7 @@ block and run. It drives three stages, reusing their math:
 | `coil_to_sample_delta.R`  | `coil_dist`  | coil translational/angular distance to the target over time |
 | `mep_vs_coil_distance.R`  | `analysis`   | per-MEP: nearest coil pose at each `trigger_time`           |
 
-Outputs to `data_analysis/output/`: a stats-ready CSV (one row per MEP:
+Outputs to `analysis/output/`: a stats-ready CSV (one row per MEP:
 `delta_distance_mm`, `delta_angle_deg`, `mep_ptp`) + three PNGs (MEP vs time,
 log(MEP) vs distance, log(MEP) vs angle).
 
@@ -468,7 +474,77 @@ and CT4661 are different arrays on different coils, they are compared only
 **within** a coil (each vs its own target), never across the swap.
 
 Extra R deps beyond the list below: `readxl`, `lubridate`, `stringr`.
-`data_analysis/R/` carries its own copy of `parse_brainsight.R`.
+`analysis/R/` carries its own copy of `parse_brainsight.R`.
+
+### Coil-offset study (`analysis/offset_study/`, Route C)
+
+Multi-participant pipeline (`run_offset_study.R` + `manifest.csv`) asking
+whether the coil's 6-DoF offset from its target changes the MEP at fixed
+stimulation. Facts it relies on, all verified on the SNBR recordings:
+
+- **Pulse times come from the QtracS `.QLG`**, one `Trigger stim` line per
+  pulse with real elapsed seconds. The xlsx `Elapsed Time (min)` is a nominal
+  sweep counter that drifts ahead of real time (~45 s / 27 min); Routes A/B,
+  which anchor it to the launch, misplace pulses by 70–115 s. The launch
+  instant is pinned to ms by intersecting the 1 s wall-clock stamps with the
+  elapsed seconds of every QLG line. `mac_time = launch + elapsed − delta_s`
+  with `delta_s` read **with its sign** from the time-sync log.
+- **Brainsight cosines: rows are the tool axes**, row 3 = outward coil normal.
+  Offsets are expressed in the target's frame: `dx/dy` in-plane, `dz` along
+  the normal (+ = lifted), `rx/ry` tilt, `rz` twist about the normal
+  (rotation vector of `M_t %*% t(M_c)`). Magnitudes equal Routes A/B's
+  `trans_dist_mm` / `ang_dist_deg`.
+- **Target per coil** = the target selected for the most visible time while
+  that coil drove the crosshairs (one target ⇒ shared; one per coil ⇒ own;
+  >2 ⇒ longest-selected wins). This assignment is always computed from MNI
+  (`Crosshairs Position`/`Target Selection`, the only rows that record which
+  target was selected when) regardless of `coord_system`.
+- **`coord_system`** (manifest column, default `"MNI"`) picks the frame the
+  OFFSET is then measured in: `"MNI"` (navigated crosshairs, always valid)
+  or `"Polaris"` (raw coil tracker relative to the head tracker `ST893`,
+  like `coil_to_sample_delta.R`'s Polaris mode). Since a Target Selection has
+  no Polaris pose, a coil's Polaris target is the average of its own first
+  `n_samples_avg` frames at/after its target's first selection. Because
+  LCT650/CT4661 are different tracker bodies, Polaris is only valid when
+  **every coil present has its own target** (`os_targets_per_coil()`); a
+  participant requesting Polaris without that fails with a clear error
+  without stopping the rest of the batch.
+- **Strata** (participant × pulse class × ISI × MSO) hold the stimulus
+  fixed; every effect is estimated within strata. **Both coils, and their
+  targets, count as one** for the offset-vs-EMG comparison (log MEP, MEP
+  present): coil is not part of `stratum` (`os_prepare_pulses()`) and is not
+  adjusted for, so each pulse's offset is measured from its own coil's target
+  but the effect is estimated across both coils together. **Exception: the
+  tracked-intensity model** (outcome = % MSO, a stimulator setting that
+  depends on the coil) keeps a coil × ISI baseline (`ci_stratum`); pooled
+  without it, a between-coil intensity difference reads as an offset effect.
+  Pulse classes from sheet D: `single` (ISI 0), `paired` (any other ISI, sign
+  kept).
+- Pulses with the coil > 25 mm or > 30° from target are excluded as "off the
+  head", not "off target" (`CFG$max_offset_mm/max_angle_deg`).
+- **Phases**: `nav_phase` pre-target / on-target (was the coil's target already
+  selected?), `run_phase` hotspot_rmt / tsici / fixed_int / post, `tracked` =
+  T-SICI block. Effect models use the on-target phase (`CFG$analysis_phase`).
+  For tracked pulses the primary outcome is the **tracked intensity**
+  (`MSO ~ |offset| + time + coil:ISI`), since the tracker clamps MEP size.
+
+Group level: random-effects mean of participant slopes + `lmerTest` mixed
+models (log MEP and tracked MSO). Outputs under `output/offset_study/`
+(git-ignored). `offset_study/app/app.R` is the Shiny dashboard over those
+outputs (`shiny::runApp("analysis/offset_study/app")`; its Run page takes
+the four data folders — defaults in a `DATA_DIRS_DEFAULT` block at the top of
+`app.R`, overridden by what is saved in `offset_study/data_paths.json` — finds
+each participant's files from a study ID (`R/data_locator.R`), adds them to the
+manifest and runs the whole manifest. Run also sweeps the folders and adds every
+participant not yet in the manifest whose four files are all found and whose
+Brainsight recording and a time-sync row are dated the QtracS-code session day
+(`os_scan_folders()`; never flips an `include = FALSE` row; tick-box to turn off); launch config in
+`.claude/launch.json`). Full guide in `analysis/README.md` §9; keep it
+in sync (same rule as above).
+
+Routes A/B (`clean_mep_times.R`, `join_meps.R`) now take pulse times from the
+QLG trigger lines through `offset_study/R/qtrac_io.R` too (`QTRAC_IO_PATH`);
+their example `CLOCK_OFFSET_SEC` / `diff` values carry the log's negative sign.
 
 ---
 
@@ -478,10 +554,9 @@ Python monitoring/alert scripts are versioned in the filename:
 `alert_brainsight_v1.py`, `alert_brainsight_v2.py`,
 `alert_brainsight_v2.1.0.py`, … `alert_brainsight_v2.6.0.py`.
 
-Keep old versions in `python/` — do not delete them. The highest version
-number is always the current one (currently **v2.6.0**). The `brainsight_gui/`
-package tracks the latest CLI version's logic rather than carrying a version
-in its name.
+Keep old versions in `archive/cli/` — do not delete them. The CLI is no longer
+developed; **v2.6.0** is its last version. The `dev/mac_gui/` package carries the
+live logic (it mirrors v2.6.0) and is not versioned in its name.
 
 ---
 
@@ -502,9 +577,9 @@ Target used for drift testing: `test_target` (future sessions); `Sample 2` (Sess
 
 **Python** — standard library only, except:
 - `pandas` (parse_brainsight.py)
-- `pyautogui` (Windows trigger receiver only — `trigger_app_AJ/windows/`)
+- `pyautogui` (Windows trigger receiver only — `dev/windows_receiver/`)
 
-The alert scripts and the Tk GUI (`brainsight_gui/`) are stdlib-only.
+The archived alert scripts and the Tk GUI (`dev/mac_gui/`) are stdlib-only.
 
 **R:**
 - `tidyverse`

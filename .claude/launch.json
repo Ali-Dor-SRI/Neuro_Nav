@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "offset-dashboard",
+      "runtimeExecutable": "C:/Program Files/R/R-4.5.2/bin/Rscript.exe",
+      "runtimeArgs": ["-e", "shiny::runApp('analysis/offset_study/app', port = 3838, launch.browser = FALSE)"],
+      "port": 3838
+    }
+  ]
+}

@@ -5,16 +5,20 @@ Real-time processing and visualization of neuronavigation data from
 that turns Brainsight drift events on a Mac into QTrack keystrokes on
 a Windows machine.
 
-The project has two halves:
+The repository is split into three top-level folders:
 
-- **`python/`** — live drift monitoring on the Mac side
-  ([`alert_brainsight_v2.2.0.py`](python/alert_brainsight_v2.2.0.py) is
-  the current entry point).
-- **`trigger_app_AJ/`** — headless TCP receiver on the Windows side
-  that types `ss`+Enter into the focused QTrack window when the Mac
-  reports a drift transition.
+- **`dev/`** — the live system. `dev/mac_gui/` is the Mac Tk GUI (drift
+  monitor + trigger sender), `dev/windows_receiver/` is the headless TCP
+  receiver on the Windows side that types `ss`+Enter into the focused QTrack
+  window when the Mac reports a drift transition, and `dev/common/` holds the
+  wire protocol, config and time-sync maths both sides share.
+- **`analysis/`** — offline R analysis (MEP vs coil placement) and the Shiny
+  dashboard (`analysis/offset_study/app/`).
+- **`archive/`** — retired code kept for reference: the CLI monitor
+  (`archive/cli/`), exploratory R scripts (`archive/analysis/`) and stale
+  build artefacts (`archive/build_artifacts/`).
 
-There's also an **`R/`** half for offline analysis and visualization.
+Raw session data lives on the lab's UNAS shared drive, not in this repo.
 
 ---
 
@@ -41,21 +45,22 @@ There's also an **`R/`** half for offline analysis and visualization.
 
 **Windows:**
 ```powershell
-pip install -r trigger_app_AJ\requirements.txt
-python -m trigger_app_AJ.windows.main
-# or double-click launch_receiver.bat at the repo root
+cd dev
+pip install -r requirements.txt
+python -m windows_receiver.main
+# or double-click dev\windows_receiver\launch_receiver.bat
 ```
 
 **Mac GUI:**
 ```bash
-cd python
-python3 -m brainsight_gui
-# or double-click launch_gui.command at the repo root
+cd dev
+python3 -m mac_gui
+# or double-click dev/mac_gui/launch_gui.command
 ```
 
-**Mac CLI (no GUI):**
+**Mac CLI (no GUI) — archived, superseded by the GUI:**
 ```bash
-python3 python/alert_brainsight_v2.2.0.py "/path/to/Streamed Info.txt" \
+python3 archive/cli/alert_brainsight_v2.2.0.py "/path/to/Streamed Info.txt" \
     --trigger-to <windows-ip>:5050 \
     --token <token-from-windows>
 ```
@@ -72,17 +77,17 @@ networking).
 ### Windows `.exe` (run on a Windows machine)
 
 ```bat
-trigger_app_AJ\build\build_windows.bat
+dev\windows_receiver\build\build_windows.bat
 ```
 
-Produces `trigger_app_AJ\dist\TMS Trigger Receiver.exe` — a ~30 MB
+Produces `dev\dist\TMS Trigger Receiver.exe` — a ~30 MB
 single-file executable. PyInstaller can't cross-compile, so this must
 run on Windows.
 
 ### Mac `.app` + `.dmg` (run on a Mac)
 
 ```bash
-bash python/brainsight_gui/build/build_mac.sh
+bash dev/mac_gui/build/build_mac.sh
 ```
 
 Produces `dist/Brainsight Monitor.app` and `dist/Brainsight Monitor.dmg`.
@@ -96,7 +101,7 @@ text-monogram icon, converts it to `.icns` via macOS-native
 
 - [`CLAUDE.md`](CLAUDE.md) — full system context (data formats,
   versioning convention, dependency list)
-- [`trigger_app_AJ/README.md`](trigger_app_AJ/README.md) — wire
+- [`dev/README.md`](dev/README.md) — wire
   protocol, file layout, build instructions for the Windows .exe,
   troubleshooting
 
@@ -112,8 +117,8 @@ text-monogram icon, converts it to `.icns` via macOS-native
 | Distributable bundles | v0.1.0  | `dist-v0.1.0`                |
 | Project release       | v0.1.0  | `v0.1.0`                     |
 
-Old script versions are kept in `python/` (`alert_brainsight_v1.py`
-through `alert_brainsight_v2.1.0.py`) — see CLAUDE.md for the rationale.
+All CLI script versions (`alert_brainsight_v1.py` to `v2.6.0.py`) are kept in
+`archive/cli/` — see CLAUDE.md for the rationale.
 
 ---
 

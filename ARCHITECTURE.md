@@ -45,7 +45,7 @@ timestamps comparable.
                 │                                  └──────────────────────────┘
                 │   after the session, offline                    │
                 └──────────────► R pipeline ◄─────────────────────┘
-                                (data_analysis/)
+                                (analysis/)
 ```
 
 ---
@@ -70,8 +70,8 @@ are the literal string `(null)`. Two coordinate systems appear: `Polaris`
 (the camera's own frame, only on `Polaris Tool` rows) and `MNI` (warped into
 standard brain space, on everything else).
 
-Two twin parsers turn this into tables — [`python/parse_brainsight.py`](python/parse_brainsight.py)
-and [`data_analysis/R/parse_brainsight.R`](data_analysis/R/parse_brainsight.R).
+Two twin parsers turn this into tables — [`dev/mac_gui/parse_brainsight.py`](dev/mac_gui/parse_brainsight.py)
+and [`analysis/R/parse_brainsight.R`](analysis/R/parse_brainsight.R).
 Both return one table per row type, keyed by label, with `(null)` → `NA` and a
 parsed `datetime` column. Missing row types come back as **empty tables with the
 right columns**, so callers never need existence checks.
@@ -110,21 +110,25 @@ it and turns auto-follow off.
 
 ### Two front ends, one behaviour
 
+The CLI was retired to `archive/cli/`; the GUI in `dev/mac_gui/` is the live
+Mac front end. The CLI is kept because it is the reference the GUI's
+`monitor_worker.py` mirrors.
+
 | | CLI | GUI |
 |---|---|---|
-| Entry | [`python/alert_brainsight_v2.6.0.py`](python/alert_brainsight_v2.6.0.py) | [`python/brainsight_gui/`](python/brainsight_gui/) (`python3 -m brainsight_gui`) |
+| Entry | [`archive/cli/alert_brainsight_v2.6.0.py`](archive/cli/alert_brainsight_v2.6.0.py) (**archived**) | [`dev/mac_gui/`](dev/mac_gui/) (`python3 -m mac_gui`) |
 | Control | Interactive REPL (`set target`, `set loc 30 40 50`, `status`, `quit`) | Two-panel wizard: **Setup** (participant + file + IP/port/token) → **Perform** (dropdowns, sliders, colour-coded log) |
 | Windows link | Optional — omit `--trigger-to` for a terminal-only monitor | **Required** — the GUI won't start without IP/port/token |
 
 The GUI is a clean **backend / view / controller** split:
-[`monitor_worker.py`](python/brainsight_gui/monitor_worker.py) holds all the
+[`monitor_worker.py`](dev/mac_gui/monitor_worker.py) holds all the
 polling and socket logic with a callback API and zero Tk imports;
-[`app.py`](python/brainsight_gui/app.py) wires those callbacks to the panels and
+[`app.py`](dev/mac_gui/app.py) wires those callbacks to the panels and
 marshals every one onto the Tk thread via `root.after(0, …)`; the panels never
 touch a socket. Message wording lives in one place,
-[`messages.py`](python/brainsight_gui/messages.py), so the log and the worker
+[`messages.py`](dev/mac_gui/messages.py), so the log and the worker
 can't drift apart. Connection details are remembered between launches by
-[`config_store.py`](python/brainsight_gui/config_store.py) (the file path is
+[`config_store.py`](dev/mac_gui/config_store.py) (the file path is
 not — it changes every session).
 
 ---
@@ -132,7 +136,7 @@ not — it changes every session).
 ## 4. The Mac ↔ Windows trigger link
 
 A small line-oriented TCP protocol over port 5050, defined in
-[`trigger_app_AJ/common/protocol.py`](trigger_app_AJ/common/protocol.py):
+[`dev/common/protocol.py`](dev/common/protocol.py):
 
 ```
 Mac → Win:  AUTH:<4-digit token>        Win → Mac:  AUTH:OK | AUTH:DENIED
@@ -146,7 +150,7 @@ receiver mints it, prints it in its startup banner, persists it with its issue
 time in `tms_token.json`, and rotates live when the week elapses. Operators read
 four digits off the Windows console and type them into the Mac once a week.
 
-**Time-sync** ([`common/timesync.py`](trigger_app_AJ/common/timesync.py)) runs
+**Time-sync** ([`common/timesync.py`](dev/common/timesync.py)) runs
 once per connection, right after auth. It's the NTP round-trip:
 `offset = ((t2−t1) + (t3−t4)) / 2`, which cancels network transit time.
 `offset = Windows_clock − Mac_clock`, so **`windows_time = mac_time + offset`**.
@@ -168,8 +172,8 @@ column) and in the log file's name, so each offset says whose session it is. It
 lives on the Mac end because the receiver types `ss` into the focused window —
 typing on that machine mid-session could swallow a trigger meant for QTrack.
 
-**The Windows side** ([`windows/server.py`](trigger_app_AJ/windows/server.py) +
-[`qtrack.py`](trigger_app_AJ/windows/qtrack.py)) accepts one Mac at a time (a
+**The Windows side** ([`windows/server.py`](dev/windows_receiver/server.py) +
+[`qtrack.py`](dev/windows_receiver/qtrack.py)) accepts one Mac at a time (a
 newer connection replaces an older one) and, on each *changed* `STATE:`, types
 `ss` + Enter into whatever window is focused — QTrack's start/stop command.
 It must be **lowercase**: `pyautogui.write("SS")` holds Shift, and QTrack reads
@@ -214,16 +218,16 @@ machines that never shared a clock, have to be reconciled:
 
 | File | Role |
 |---|---|
-| [`run_analysis.R`](data_analysis/run_analysis.R) | **Orchestrator and the only file you edit.** An `INPUTS` block (3 paths, time window, clock offset, target/frame settings) + an `OUTPUTS` block, then it sources the stages and owns every plot and CSV |
-| [`clean_mep_times.R`](data_analysis/clean_mep_times.R) | Stage 1 — builds `mep_clean`: MEP amplitude + **`trigger_time`** |
-| [`coil_to_sample_delta.R`](data_analysis/coil_to_sample_delta.R) | Stage 2 — builds `coil_dist` / `coil_delta`: coil pose vs target over time. The largest and most configurable script (~530 lines) |
-| [`mep_vs_coil_distance.R`](data_analysis/mep_vs_coil_distance.R) | Stage 3 — builds `analysis`: joins the two on time |
-| [`R/parse_brainsight.R`](data_analysis/R/parse_brainsight.R) | The R twin of the Python parser — same schemas, same `(null)` → `NA`, same empty-table-with-right-columns guarantee |
-| [`join_meps.R`](data_analysis/join_meps.R) | Standalone one-call join for MEPs you already have in a data frame — see "Ad-hoc joins" below |
-| [`R/sync_mep_times.R`](data_analysis/R/sync_mep_times.R) | Standalone helper, not sourced by the pipeline — see "Where the clock offset comes from" below |
+| [`run_analysis.R`](analysis/run_analysis.R) | **Orchestrator and the only file you edit.** An `INPUTS` block (3 paths, time window, clock offset, target/frame settings) + an `OUTPUTS` block, then it sources the stages and owns every plot and CSV |
+| [`clean_mep_times.R`](analysis/clean_mep_times.R) | Stage 1 — builds `mep_clean`: MEP amplitude + **`trigger_time`** |
+| [`coil_to_sample_delta.R`](analysis/coil_to_sample_delta.R) | Stage 2 — builds `coil_dist` / `coil_delta`: coil pose vs target over time. The largest and most configurable script (~530 lines) |
+| [`mep_vs_coil_distance.R`](analysis/mep_vs_coil_distance.R) | Stage 3 — builds `analysis`: joins the two on time |
+| [`R/parse_brainsight.R`](analysis/R/parse_brainsight.R) | The R twin of the Python parser — same schemas, same `(null)` → `NA`, same empty-table-with-right-columns guarantee |
+| [`join_meps.R`](analysis/join_meps.R) | Standalone one-call join for MEPs you already have in a data frame — see "Ad-hoc joins" below |
+| [`R/sync_mep_times.R`](analysis/R/sync_mep_times.R) | Standalone helper, not sourced by the pipeline — see "Where the clock offset comes from" below |
 
-(`R/explore.R` and `R/multi_target_explore.R` are exploratory scratch work, not
-part of the pipeline.)
+(`explore.R`, `multi_target_explore.R` and `sandbox.R` are exploratory scratch
+work, not part of the pipeline; they live in `archive/analysis/`.)
 
 **How the stages communicate.** Not by function calls or intermediate files —
 each script is `source()`d and **leaves named data frames in the global
@@ -321,7 +325,7 @@ meant to be eyeballed before anyone assumes linearity.
 
 ### Outputs
 
-Written to `data_analysis/output/`, all git-ignored (they carry subject IDs and
+Written to `analysis/output/`, all git-ignored (they carry subject IDs and
 session timestamps): one **CSV** — `trigger_time`, `coil`,
 `delta_distance_mm`, `delta_angle_deg`, `mep_ptp`, one row per surviving MEP —
 plus **three PNGs**: MEP vs time, log(MEP) vs distance, log(MEP) vs angle. The
@@ -331,11 +335,11 @@ as two series rather than one misleading cloud.
 ### Ad-hoc joins
 
 When the MEPs are already in the session as a data frame rather than a QtracP
-export, [`join_meps.R`](data_analysis/join_meps.R) does the same job in one
+export, [`join_meps.R`](analysis/join_meps.R) does the same job in one
 call:
 
 ```r
-source("Y:/Neuro_Nav_App/data_analysis/join_meps.R")
+source("Y:/Neuro_Nav_App/analysis/join_meps.R")
 out <- join_MEPs(diff = 0.472957, QLG = QLG_PATH, new_df = df,
                  neuronav = NEURONAV_PATH, sample = "Sample 1")
 ```
@@ -375,7 +379,7 @@ has a target baked in.
 **Windows — start the receiver** (prints IP, port, and token for the Mac):
 
 ```bash
-python -m trigger_app_AJ.windows.main
+cd dev && python -m windows_receiver.main
 ```
 
 Useful flags: `--show-token`, `--new-token`, `--token 1234` (pins it, disables
@@ -384,45 +388,45 @@ rotation), `--no-keystroke` (dry run), `--port N`.
 **Mac — GUI:**
 
 ```bash
-cd python && python3 -m brainsight_gui
+cd dev && python3 -m mac_gui
 ```
 
-**Mac — CLI, terminal-only (no Windows machine needed):**
+**Mac — CLI, terminal-only (no Windows machine needed; archived):**
 
 ```bash
-python3 python/alert_brainsight_v2.6.0.py "path/to/Streamed Info.txt"
+python3 archive/cli/alert_brainsight_v2.6.0.py "path/to/Streamed Info.txt"
 ```
 
 **Mac — CLI, with triggering:**
 
 ```bash
-python3 python/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
+python3 archive/cli/alert_brainsight_v2.6.0.py "<file>" --trigger-to 192.168.1.20:5050 --token 1234
 ```
 
 **Check a session file is actually being written:**
 
 ```bash
-python3 python/monitor_brainsight.py "path/to/Streamed Info.txt"
+python3 archive/cli/monitor_brainsight.py "path/to/Streamed Info.txt"
 ```
 
 **Send test TTL pulses to Brainsight** via an NI USB-6361 (needs `nidaqmx`;
 `--dry-run` works without hardware):
 
 ```bash
-python3 python/daq_trigger_out.py --interval 0.5 --count 50
+python3 archive/cli/daq_trigger_out.py --interval 0.5 --count 50
 ```
 
 **Analysis** — open `Neuro_Nav.Rproj` in RStudio, edit the `INPUTS` /`OUTPUTS`
 blocks at the top of
-[`data_analysis/run_analysis.R`](data_analysis/run_analysis.R), and run the
+[`analysis/run_analysis.R`](analysis/run_analysis.R), and run the
 whole file. Nothing else needs editing, and each stage can also be run on its
 own (it falls back to its own defaults). Restart the R session between
 participants. R packages needed: `dplyr`, `ggplot2`, `readxl`, `lubridate`,
 `stringr`.
 
 **Builds** — PyInstaller can't cross-compile, so each runs on its own platform:
-`bash python/brainsight_gui/build/build_mac.sh` → `Brainsight Monitor.app`/`.dmg`;
-`trigger_app_AJ\build\build_windows.bat` → `TMS Trigger Receiver.exe`.
+`bash dev/mac_gui/build/build_mac.sh` → `Brainsight Monitor.app`/`.dmg`;
+`dev\windows_receiver\build\build_windows.bat` → `TMS Trigger Receiver.exe`.
 Both bundles are self-contained — lab machines need no Python.
 
 ---
@@ -430,30 +434,28 @@ Both bundles are self-contained — lab machines need no Python.
 ## 7. Conventions and gotchas
 
 - **Versioned filenames, not branches.** `alert_brainsight_v1.py` →
-  `v2.6.0.py`; old versions are kept on purpose. **The highest number is the
-  current one.** The GUI tracks the latest CLI's logic instead of carrying its
+  `v2.6.0.py`, now in `archive/cli/`; old versions are kept on purpose. **The
+  highest number is the last CLI release.** The GUI tracks the latest CLI's logic instead of carrying its
   own version.
 - **The Mac side is stdlib-only** (`parse_brainsight.py` aside, which needs
   pandas). That's why the protocol constants and geometry are *duplicated* in
   the CLI script and in `monitor_worker.py` rather than imported from
-  `trigger_app_AJ/common/` — the CLI script must be copyable to a Mac as a
-  single file. `common/protocol.py` is the canonical definition; **change it and
+  `dev/common/` — the Mac app must stay self-contained.
+  `dev/common/protocol.py` is the canonical definition; **change it and
   the two copies together.** Only the Windows receiver has a dependency
   (`pyautogui`).
-- **Nothing with subject data is tracked.** `.gitignore` excludes `data/`, all
-  `*.csv`, `data_analysis/output/`, the token files, `config.json`,
+- **Nothing with subject data is tracked.** `.gitignore` excludes `data/` (the data now lives on the UNAS shared drive), all
+  `*.csv`, `analysis/output/`, the token files, `config.json`,
   `receiver_settings.json`, and `time_sync_logs/`. Session exports live in the
   lab data store.
-- **Open `Neuro_Nav.Rproj` before running R** — but note the `data_analysis/`
+- **Open `Neuro_Nav.Rproj` before running R** — but note the `analysis/`
   scripts hard-code **absolute** paths (`Y:/Neuro_Nav_App/...` for the repo,
   `Y:/Merged Data/...` for the Qtrac exports). They run as-is only on the lab
   Windows machine; elsewhere, change `PROJECT_ROOT` and the input paths in
   `run_analysis.R`.
-- **Docs to cross-check:** [`CLAUDE.md`](CLAUDE.md) is the deepest reference but
-  still describes an `R/` directory at the repo root — those helpers now live in
-  [`data_analysis/R/`](data_analysis/R/). [`README.md`](README.md) still names
-  v2.2.0 as the CLI entry point; v2.6.0 is current.
-  [`trigger_app_AJ/README.md`](trigger_app_AJ/README.md) is the authority on the
+- **Docs to cross-check:** [`CLAUDE.md`](CLAUDE.md) is the deepest reference;
+  the R helpers live in [`analysis/R/`](analysis/R/).
+  [`dev/README.md`](dev/README.md) is the authority on the
   wire protocol and troubleshooting; [`CHANGELOG.md`](CHANGELOG.md) records what
   each version added.
 
@@ -461,10 +463,10 @@ Both bundles are self-contained — lab machines need no Python.
 
 | To understand… | Read |
 |---|---|
-| The file format everything depends on | [`python/parse_brainsight.py`](python/parse_brainsight.py) — the `SCHEMAS` dict is the whole spec |
-| The live drift logic, end to end | [`python/alert_brainsight_v2.6.0.py`](python/alert_brainsight_v2.6.0.py) — `monitor_loop()` is the heart |
-| How the two machines agree on time | [`trigger_app_AJ/common/timesync.py`](trigger_app_AJ/common/timesync.py) |
-| How the GUI stays thread-safe | [`python/brainsight_gui/monitor_worker.py`](python/brainsight_gui/monitor_worker.py) — the docstring states the contract |
-| The offline analysis | [`data_analysis/run_analysis.R`](data_analysis/run_analysis.R) — its `INPUTS` block is the whole interface — then the three stage scripts in order |
-| Why an MEP's timestamp is what it is | [`data_analysis/clean_mep_times.R`](data_analysis/clean_mep_times.R) — the four-line transformation chain in its header comment |
-| The coil-vs-target geometry and its options | [`data_analysis/coil_to_sample_delta.R`](data_analysis/coil_to_sample_delta.R) — the header comment documents both switches before any code runs |
+| The file format everything depends on | [`dev/mac_gui/parse_brainsight.py`](dev/mac_gui/parse_brainsight.py) — the `SCHEMAS` dict is the whole spec |
+| The live drift logic, end to end | [`archive/cli/alert_brainsight_v2.6.0.py`](archive/cli/alert_brainsight_v2.6.0.py) — `monitor_loop()` is the heart |
+| How the two machines agree on time | [`dev/common/timesync.py`](dev/common/timesync.py) |
+| How the GUI stays thread-safe | [`dev/mac_gui/monitor_worker.py`](dev/mac_gui/monitor_worker.py) — the docstring states the contract |
+| The offline analysis | [`analysis/run_analysis.R`](analysis/run_analysis.R) — its `INPUTS` block is the whole interface — then the three stage scripts in order |
+| Why an MEP's timestamp is what it is | [`analysis/clean_mep_times.R`](analysis/clean_mep_times.R) — the four-line transformation chain in its header comment |
+| The coil-vs-target geometry and its options | [`analysis/coil_to_sample_delta.R`](analysis/coil_to_sample_delta.R) — the header comment documents both switches before any code runs |
