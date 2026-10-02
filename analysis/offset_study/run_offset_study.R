@@ -334,3 +334,9 @@ rep <- c(
 )
 writeLines(rep, file.path(gdir, "offset_study_report.md"))
 message(sprintf("\nDone. Report: %s", file.path(gdir, "offset_study_report.md")))
+# Last lines of the log on purpose: the group outputs hold only the participants
+# that completed, so a partial run must not look like a full one.
+if (length(failures))
+  message(sprintf("\n** %d of %d included participants FAILED and are NOT in the group outputs:\n%s",
+                  length(failures), sum(manifest$include),
+                  paste(sprintf("   - %s: %s", names(failures), unlist(failures)), collapse = "\n")))

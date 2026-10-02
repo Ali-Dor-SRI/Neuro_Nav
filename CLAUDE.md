@@ -542,6 +542,16 @@ Brainsight recording and a time-sync row are dated the QtracS-code session day
 `.claude/launch.json`). Full guide in `analysis/README.md` §9; keep it
 in sync (same rule as above).
 
+The group tables (`group/all_*.csv`) hold **only the participants that
+completed the last run**; Overview/Group/Decisions read those, while the
+Participant page reads the participant's own `<id>/<id>_*.csv`. The manifest
+stores full paths, so data moved on the share make participants fail with
+`Brainsight file not found` and drop out of the group (2026-10-02: recordings
+and time-sync logs moved to `Y:/Merged Data/Neuro_Nav/recording` and
+`.../Neuro_nav_time_sync`). `os_relocate_missing()` (Run page: **Repair moved
+paths**, also applied by Run) repoints manifest paths that no longer exist to
+the same file name in the current data folders.
+
 Routes A/B (`clean_mep_times.R`, `join_meps.R`) now take pulse times from the
 QLG trigger lines through `offset_study/R/qtrac_io.R` too (`QTRAC_IO_PATH`);
 their example `CLOCK_OFFSET_SEC` / `diff` values carry the log's negative sign.

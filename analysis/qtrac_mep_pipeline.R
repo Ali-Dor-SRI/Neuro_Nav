@@ -15,7 +15,7 @@ source("analysis/R/parse_brainsight.R")
 # =====================================================================
 
 # ---- files ----------------------------------------------------------
-neuronav_path <- "Y:/Neuro_Nav_App/data/BS_Recordings/SNBR-188.txt"
+neuronav_path <- "Y:/Merged Data/Neuro_Nav/recording/SNBR-188.txt"
 neuronav_info <- brainsight_info(neuronav_path)
 QTRAC_path    <- "Y:/Merged Data/xlsx Data/SNBR-188-FU1-TP3C60728A.xlsx"
 QLG_file      <- "Y:/Merged Data/Data/TP3C60728A.QLG"

@@ -7,6 +7,32 @@ project-wide release tag (`vX.Y.Z`).
 
 ---
 
+## Offset dashboard: moved data folders — 2026-10-02
+
+The Brainsight recordings and time-sync logs moved on the share
+(`Y:/Neuro_Nav_App/data/...` -> `Y:/Merged Data/Neuro_Nav/recording` and
+`.../Neuro_nav_time_sync`). `manifest.csv` still held the old paths, so a run
+failed every participant but the newest and the group tables shrank to one
+participant: the Overview/Group/Decisions pages showed one participant and the
+Participant page lost its pulse dots (it took them from the group table).
+
+- `os_relocate_missing()` (`analysis/offset_study/R/data_locator.R`) repoints
+  manifest paths that no longer exist to the same file name in the current
+  data folders. Run page: live status and a **Repair moved paths** button
+  above the manifest table (with Save/Delete, which used to sit below the
+  table, off-screen inside the scrolling card), and Run applies it first.
+- The Participant page reads the participant's own `<id>_pulses.csv`,
+  `_stats.csv` and `_placement.csv` instead of filtering the group tables, so
+  it stays complete for a participant that failed the last run (with a note).
+- Overview banner naming the participants the last run failed, and whether
+  their files can be found now; the run log now ends with the same list. "Participants" counts those in the pooled results.
+- Timeline dots take the documented class colours (blue single, orange
+  paired); plotly was ignoring the palette. The MEP-vs-offset plot's output id
+  no longer collides with the "Degrees of freedom" input.
+- `DATA_DIRS_DEFAULT` and the SNBR-188 example paths point at the new folders.
+
+---
+
 ## Repository reorganisation — 2026-10-02
 
 The repo is now split into `dev/` (Mac GUI, Windows receiver, shared protocol),
