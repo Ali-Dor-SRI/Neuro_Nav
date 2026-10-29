@@ -34,7 +34,7 @@ Brainsight .txt ► coil pose over time ─► distance/angle to target ──�
 |---|---|---|---|
 | QtracP export `.xlsx` | MEP amplitudes and stimulator output, stamped in elapsed minutes | QtracP export (Windows) | `Y:/Merged Data/xlsx Data/SNBR-188-FU1-TP3C60728A.xlsx` |
 | QtracS run log `.QLG` | The wall-clock time QtracS was launched, which anchors elapsed time | QtracS data folder | `Y:/Merged Data/Data/TP3C60728A.QLG` |
-| Brainsight stream `.txt` | Coil and head tracker poses at 20 Hz, plus samples and targets | Brainsight "Streamed Info" export | `Y:/Neuro_Nav_App/data/BS_Recordings/SNBR-188.txt` |
+| Brainsight stream `.txt` | Coil and head tracker poses at 20 Hz, plus samples and targets | Brainsight "Streamed Info" export | `Y:/Merged Data/Neuro_Nav/recording/SNBR-188.txt` |
 | Time-sync log | The **clock offset** in seconds (Windows − Mac) | The trigger receiver's `time_sync_logs/` folder, one file per connection | `time_sync_2026-09-10_09-14-22_SNBR-188.txt` |
 
 **Getting the clock offset.** Open that session's time-sync file and copy the
@@ -137,7 +137,7 @@ source("analysis/join_meps.R")      # defines join_MEPs(); nothing runs yet
 out <- join_MEPs(diff     = 0.081863,
                  QLG      = "Y:/Merged Data/Data/TP3C60728A.QLG",
                  new_df   = df2,
-                 neuronav = "Y:/Neuro_Nav_App/data/BS_Recordings/SNBR-188.txt",
+                 neuronav = "Y:/Merged Data/Neuro_Nav/recording/SNBR-188.txt",
                  sample   = "Sample 1")
 ```
 
@@ -318,7 +318,7 @@ set `coil_name` / `COIL_NAME`.
 
 ```r
 source("analysis/R/parse_brainsight.R")
-brainsight_info("Y:/Neuro_Nav_App/data/BS_Recordings/SNBR-188.txt")
+brainsight_info("Y:/Merged Data/Neuro_Nav/recording/SNBR-188.txt")
 ```
 
 Prints the recording length, the trackers actually seen (with the coils among
@@ -616,6 +616,16 @@ this" panel. Nothing is recomputed in the app.
 All times in the dashboard are the Toronto wall-clock times the pipeline
 wrote (a pulse fired at 12:04 shows as 12:04).
 
+**Which run a page shows.** The Overview, Group and Decisions pages read the
+group tables (`group/all_*.csv`), which hold **only the participants that
+completed the last run**. A participant that failed it (an input file not
+found, say) is missing from those pages, and a yellow banner on the Overview
+names every such participant with the reason. The Participant page reads that
+participant's **own** folder (`<id>/<id>_pulses.csv`, `_stats.csv`,
+`_placement.csv`, the 2 Hz stream and the QC text), so it stays complete for
+anyone analysed in an earlier run; a note under its title says when the outputs
+shown are from an earlier run and not part of the current group results.
+
 **The Run page**, top to bottom:
 
 1. **Data folders**: where the four kinds of file live (QtracP `.xlsx`, QtracS
@@ -669,7 +679,23 @@ wrote (a pulse fired at 12:04 shows as 12:04).
 3. **Manifest**: the table from §9.1. Double-click a cell to edit; select rows
    and **Delete selected rows** to remove them. Every change from Add or Delete
    is written to `manifest.csv` straight away, and Run saves it again.
-4. **Settings for this run** and **Add & run pipeline**: Run adds the ready
+
+   **Moved data.** The manifest stores full paths, so moving the data on the
+   share leaves its rows pointing at folders that no longer exist. Set the new
+   folders in step 1; a line above the table then says how many manifest paths
+   are gone but have **the same file name** in those folders, and **Repair
+   moved paths** (next to Save manifest, above the table; or simply Run)
+   points the manifest at them
+   (`os_relocate_missing()` in `R/data_locator.R`). A path that still exists is
+   never changed, a time-sync *folder* is replaced by the current time-sync
+   folder, and `include`, `notes` and the other columns are untouched. Files
+   that are in neither place are listed in red: those participants will fail
+   until the file is copied into the folder of step 1. The line re-checks the
+   folders every 30 s, so a file copied in while the page is open clears it,
+   and the Overview banner's last line says whether the participants the last
+   run failed can be found **now**.
+4. **Settings for this run** and **Add & run pipeline**: Run repairs moved
+   paths, adds the ready
    participants (the automatic sweep, then any IDs left in step 2's box),
    saves the manifest and the folders, warns about any
    included row whose files are missing (that participant fails and is skipped;
@@ -711,3 +737,5 @@ folder; the first Run fills it.
 | `no target was selected while it was in use` | The coil was used before any `Target Selection`; the fallback rule is printed. Add a target in Brainsight next time. |
 | `time-sync row is dated …` | No sync row from this session in the folder; copy the receiver's `time_sync_logs/` file over, or set `clock_offset_s`. |
 | `lmerTest not installed` | `install.packages("lmerTest")`; the participant stage still runs. |
+| Overview / Group / Decisions show one or a few participants; mixed-model tables empty; yellow banner on the Overview | The last run failed the others (`Brainsight file not found: …` after the data were moved) and the group tables hold only those that completed. Set the folders on the Run page, press **Repair moved paths**, run again. The run log ends with `** N of M included participants FAILED` when this happens. |
+| `Not at the manifest path and not in the folders of step 1` (red, above the manifest table) | The file was not carried over when the data were moved. Copy it into the folder of step 1 (same file name) and run again. |

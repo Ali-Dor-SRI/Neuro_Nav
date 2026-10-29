@@ -15,6 +15,9 @@
 #                        Brainsight recording: which are ready to add, which
 #                        are still waiting, which are complete but excluded
 #   os_merge_manifest()  add / update those rows in a manifest table
+#   os_relocate_missing() repoint manifest paths whose file has gone to the
+#                        same file in the current data folders (after the
+#                        data were moved on the share)
 #
 # HOW EACH FILE IS FOUND
 #   xlsx        <xlsx folder>/<ID>-....xlsx (the ID, then - _ or .). Several
@@ -288,4 +291,47 @@ os_merge_manifest <- function(man, found) {
     for (cl in c("xlsx", "qlg", "brainsight", "timesync")) man[[cl]][i] <- f[[cl]]
   }
   man[, c(OS_MANIFEST_COLS, setdiff(names(man), OS_MANIFEST_COLS))]
+}
+
+#' Repoint manifest paths that no longer exist to the current data folders.
+#'
+#' The manifest stores full paths, so moving the data on the share leaves every
+#' row pointing at a folder that is gone; the pipeline then fails those
+#' participants and pools only the ones that still resolve. A path that still
+#' exists is never touched. One that does not is replaced by the file of the
+#' SAME NAME in the matching folder of `dirs` (the files were moved, not
+#' renamed); a time-sync FOLDER is replaced by the current time-sync folder,
+#' provided it holds time_sync*.txt files. Blank cells are left alone.
+#' @param man  manifest table (all-character columns)
+#' @param dirs list(xlsx, qlg, brainsight, timesync): the four folders
+#' @return list: `manifest` (updated), `moved` (participant, column, old, new:
+#'   what was repointed) and `missing` (participant, column, old: gone and not
+#'   found in the current folder either)
+os_relocate_missing <- function(man, dirs) {
+  moved <- tibble(participant = character(0), column = character(0), old = character(0), new = character(0))
+  missing <- moved[, c("participant", "column", "old")]
+  if (is.null(man) || nrow(man) == 0L) return(list(manifest = man, moved = moved, missing = missing))
+  pat <- c(xlsx = "[.]xlsx$", qlg = "[.]qlg$", brainsight = "[.]txt$", timesync = "^time_sync.*[.]txt$")
+  listing <- list()                    # one directory listing per column, only if needed
+  in_dir <- function(cl) {
+    if (is.null(listing[[cl]])) listing[[cl]] <<- os_list_dir(dirs[[cl]], pat[[cl]])
+    listing[[cl]]
+  }
+  for (cl in intersect(names(pat), names(man))) {
+    for (i in seq_len(nrow(man))) {
+      old <- man[[cl]][i]
+      if (is.na(old) || !nzchar(trimws(old)) || file.exists(old)) next
+      have <- in_dir(cl)
+      new <- have[match(tolower(basename(old)), tolower(basename(have)))]
+      if (cl == "timesync" && !grepl("[.]txt$", old, ignore.case = TRUE))     # a folder, not one log
+        new <- if (length(have)) dirs[[cl]] else NA_character_
+      if (is.na(new)) {
+        missing <- bind_rows(missing, tibble(participant = man$participant[i], column = cl, old = old))
+      } else {
+        moved <- bind_rows(moved, tibble(participant = man$participant[i], column = cl, old = old, new = new))
+        man[[cl]][i] <- new
+      }
+    }
+  }
+  list(manifest = man, moved = moved, missing = missing)
 }

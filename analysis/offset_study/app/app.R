@@ -28,8 +28,8 @@
 DATA_DIRS_DEFAULT <- list(
   xlsx       = "Y:/Merged Data/xlsx Data",              # QtracP exports, <ID>-...-<code>.xlsx
   qlg        = "Y:/Merged Data/Data",                   # QtracS run logs, <code>.QLG
-  brainsight = "Y:/Neuro_Nav_App/data/BS_Recordings",   # Brainsight streamed-info .txt
-  timesync   = "Y:/Neuro_Nav_App/data/time_sync"        # receiver's time_sync*.txt files
+  brainsight = "Y:/Merged Data/Neuro_Nav/recording",    # Brainsight streamed-info .txt
+  timesync   = "Y:/Merged Data/Neuro_Nav/Neuro_nav_time_sync"   # receiver's time_sync*.txt files
 )
 # Where the repo (the folder holding Neuro_Nav.Rproj) may live, if the app is
 # not started from it. The current directory is tried first.
@@ -98,16 +98,18 @@ as_local_time <- function(x) {
   if (inherits(x, "POSIXct")) return(x)
   as.POSIXct(as.character(x), format = "%Y-%m-%d %H:%M:%OS", tz = APP_TZ)
 }
+# A pulses table (all_pulses.csv or one participant's <id>_pulses.csv) as the pages use it.
+prep_pulses <- function(pulses) {
+  if (is.null(pulses)) return(NULL)
+  pulses %>% mutate(
+    mac_time = as_local_time(mac_time),
+    pulse_class = factor(pulse_class, levels = c("single", "paired", "unknown")))
+}
 load_outputs <- function() {
   g <- file.path(OUT_DIR, "group")
   info <- if (file.exists(file.path(g, "run_info.json")) && requireNamespace("jsonlite", quietly = TRUE))
     jsonlite::read_json(file.path(g, "run_info.json"), simplifyVector = TRUE) else NULL
-  pulses <- read_or_null(file.path(g, "all_pulses.csv"))
-  if (!is.null(pulses)) {
-    pulses <- pulses %>% mutate(
-      mac_time = as_local_time(mac_time),
-      pulse_class = factor(pulse_class, levels = c("single", "paired", "unknown")))
-  }
+  pulses <- prep_pulses(read_or_null(file.path(g, "all_pulses.csv")))
   parts <- sort(setdiff(list.dirs(OUT_DIR, full.names = FALSE, recursive = FALSE), "group"))
   list(info = info, pulses = pulses,
        stats = read_or_null(file.path(g, "all_stats.csv")),
@@ -117,6 +119,10 @@ load_outputs <- function() {
        participants = parts,
        report = if (file.exists(file.path(g, "offset_study_report.md"))) file.path(g, "offset_study_report.md") else NULL)
 }
+# Everything the Participant page shows comes from that participant's OWN
+# folder, not from the group tables: the group tables hold only the participants
+# that completed the LAST run, so a participant that failed it (a moved input
+# file) would otherwise keep its coil trace but lose its pulses and tables.
 load_participant <- function(id) {
   d <- file.path(OUT_DIR, id)
   f <- function(s) file.path(d, paste0(id, "_", s))
@@ -128,6 +134,8 @@ load_participant <- function(id) {
   if (!is.null(bl)) { bl$start <- as_local_time(bl$start)
                       bl$end <- as_local_time(bl$end) }
   list(stream = st, events = ev, blocks = bl,
+       pulses = prep_pulses(read_or_null(f("pulses.csv"))),
+       stats = read_or_null(f("stats.csv")), place = read_or_null(f("placement.csv")),
        qc = if (file.exists(f("qc.txt"))) readLines(f("qc.txt"), warn = FALSE) else "no QC file",
        targets = read_or_null(f("targets.csv")),
        timeline_png = if (file.exists(f("timeline.png"))) paste0("osout/", id, "/", id, "_timeline.png") else NULL)
@@ -151,6 +159,13 @@ dir_input <- function(id, label, value)
 tbl_or_msg <- function(df, msg = "Run the pipeline first (Run page).") {
   if (is.null(df) || nrow(df) == 0L) return(datatable(data.frame(note = msg), options = list(dom = "t")))
   datatable(df, options = dt_opts(), rownames = FALSE, filter = "top")
+}
+# Participants the last run could not analyse, as c(id = reason). The group
+# tables (and so the Overview, Group and Decisions pages) do not contain them.
+run_failures <- function(info) {
+  f <- info$failures
+  if (is.null(f) || !length(f) || is.null(names(f))) return(character(0))
+  unlist(f)
 }
 # Rounds numeric columns for display.
 disp <- function(df, digits = 3) { if (is.null(df)) return(df); df %>% mutate(across(where(is.numeric), ~ signif(.x, digits))) }
@@ -225,6 +240,7 @@ ui <- page_navbar(
     .qc pre{font-size:0.78rem;white-space:pre-wrap} .small-note{color:#52514e;font-size:0.85rem}"))),
 
   nav_panel("Overview", icon = icon("gauge-high"),
+    uiOutput("run_warn"),
     layout_columns(col_widths = c(3, 3, 3, 3),
       value_box("Participants", textOutput("vb_n", inline = TRUE), showcase = icon("users")),
       value_box("Pulses analysed", textOutput("vb_pulses", inline = TRUE), showcase = icon("bolt")),
@@ -246,13 +262,13 @@ ui <- page_navbar(
         checkboxGroupInput("pp_class", "Pulse classes", choices = CLASS_CHOICES, selected = names(CLASS_LABELS)),
         radioButtons("pp_phase", "Phase", choices = c("On-target only" = "on-target", "All kept pulses" = "all")),
         markdown(TXT$phases)),
-      card(card_header(textOutput("pp_title")), verbatimTextOutput("pp_qc"),
+      card(card_header(textOutput("pp_title")), uiOutput("pp_stale"), verbatimTextOutput("pp_qc"),
            info_card("How to read the QC", markdown("*QtracS launch*: pinned from the run log. *Matched to a QLG trigger*: share of QtracP rows with a real pulse time; should be ~100%. *Sweep-clock drift*: how far the xlsx elapsed time is from real time (why the QLG is used). *Clock offset*: the time-sync row used and whether it was labelled with this participant. *Targets*: which target each coil was measured against and for how long it was selected while that coil was in use. *Pulses joined*: kept vs dropped and why. *Placement*: median and spread of the coil's distance from target at the pulses, per phase."))),
       card(card_header("Coil offset over the session"),
            plotlyOutput("pp_timeline", height = 900),
            info_card("How to read this", markdown("Grey lines: the coil stream (0.5 s means), one panel per degree of freedom, clipped to the off-head limits. Dots: pulses, coloured by class (blue single, orange paired); hover for MSO, ISI and MEP. Orange dashed verticals: target selections. Shaded bands: which coil was in use and which target it was measured against. A steady offset from zero is a systematic placement error; a wandering trace is drift."))),
       card(card_header("MEP against each offset"),
-           plotlyOutput("pp_dof", height = 560),
+           plotlyOutput("pp_dof_plot", height = 560),   # not "pp_dof": that id is the sidebar input
            info_card("How to read this", markdown("Each dot is one pulse in the chosen phase, colour = % MSO (darker = stronger). Because MSO differs between dots, do not read a slope off this picture: the table below holds the within-MSO slopes. Look for a fan opening downwards as the offset grows, and for how far the coil was allowed to drift at all (the x range)."))),
       card(card_header("Within-stratum effects for this participant"),
            layout_columns(col_widths = c(3, 3, 3, 3),
@@ -331,9 +347,13 @@ ui <- page_navbar(
     layout_columns(col_widths = c(7, 5),
       card(card_header("3. Manifest (one row per participant)"),
            p(class = "small-note", "Double-click a cell to edit. include = TRUE/FALSE. clock_offset_s (optional) replaces the time-sync lookup. coord_system = MNI (default, blank) or Polaris (needs every coil in that session to have its own target). Run saves the manifest for you."),
-           DTOutput("manifest"),
+           # Buttons and status ABOVE the table: the card scrolls inside itself, so
+           # anything under a long manifest is off-screen until you scroll the card.
            div(actionButton("save_manifest", "Save manifest", icon = icon("save")),
-               actionButton("del_rows", "Delete selected rows", icon = icon("trash")))),
+               actionButton("del_rows", "Delete selected rows", icon = icon("trash")),
+               actionButton("repair_paths", "Repair moved paths", icon = icon("wrench"))),
+           uiOutput("man_paths"),
+           DTOutput("manifest")),
       card(card_header("4. Settings for this run"),
            radioButtons("run_phase", "Effect models use", c("On-target pulses (recommended)" = "on-target", "All kept pulses" = "all")),
            numericInput("run_max_mm", "Off-head distance limit (mm)", 25, min = 5, max = 100),
@@ -342,7 +362,7 @@ ui <- page_navbar(
            textInput("run_tol_deg", "Angle tolerances reported (deg)", "5,10"),
            actionButton("run_pipeline", "Add & run pipeline", class = "btn-primary", icon = icon("play")),
            actionButton("reload", "Reload outputs", icon = icon("arrows-rotate")),
-           p(class = "small-note", "Run adds any ready participants from step 2, saves the manifest, then analyses every participant with include = TRUE and pools them. It takes a few minutes per participant (large Brainsight files). The log below updates live; outputs reload when it finishes."))),
+           p(class = "small-note", "Run repairs moved paths, adds any ready participants from step 2, saves the manifest, then analyses every participant with include = TRUE and pools them. It takes a few minutes per participant (large Brainsight files). The log below updates live; outputs reload when it finishes."))),
     card(card_header("Run log"), verbatimTextOutput("run_log"))
   )
 )
@@ -357,7 +377,22 @@ server <- function(input, output, session) {
   })
 
   # -- overview ------------------------------------------------------
-  output$vb_n <- renderText(length(D()$participants))
+  output$run_warn <- renderUI({
+    i <- D()$info; f <- run_failures(i)
+    if (!length(f)) return(NULL)
+    # The list above is what the LAST RUN saw; this line is what is true now.
+    gone <- intersect(names(f), reloc()$missing$participant)
+    div(class = "alert alert-warning",
+        tags$b(sprintf("The last run (%s) analysed %d of %d participants.", i$run_time,
+                       length(i$participants), length(i$participants) + length(f))),
+        " The Overview, Group and Decisions pages show only those. Not analysed:",
+        tags$ul(lapply(names(f), function(id) tags$li(tags$b(id), ": ", f[[id]]))),
+        if (length(gone)) sprintf(
+          "Still not found now: %s. Copy the files into the folders shown on the Run page (step 1), then press Add & run pipeline there.",
+          paste(gone, collapse = ", "))
+        else "Their input files are all found now. Press Add & run pipeline on the Run page to analyse them; Run points the manifest at moved files itself.")
+  })
+  output$vb_n <- renderText({ p <- D()$pulses; if (is.null(p)) 0L else n_distinct(p$participant) })   # in the pooled results
   output$vb_pulses <- renderText({ p <- D()$pulses; if (is.null(p)) "0" else format(sum(p$analysis_set, na.rm = TRUE), big.mark = ",") })
   output$vb_3mm <- renderText({ p <- D()$pulses; if (is.null(p)) "-" else sprintf("%.0f%%", 100 * mean(p$trans_dist_mm[p$analysis_set] <= 3, na.rm = TRUE)) })
   output$vb_run <- renderText({ i <- D()$info; if (is.null(i)) "never" else i$run_time })
@@ -371,11 +406,20 @@ server <- function(input, output, session) {
   # -- participant --------------------------------------------------
   P <- reactive({ req(input$pp); load_participant(input$pp) })
   pp_pulses <- reactive({
-    p <- D()$pulses; req(p, input$pp)
-    p %>% filter(participant == input$pp, kept, pulse_class %in% input$pp_class,
+    p <- P()$pulses
+    if (is.null(p)) return(NULL)
+    p %>% filter(kept, pulse_class %in% input$pp_class,
                  input$pp_phase == "all" | nav_phase == input$pp_phase)
   })
   output$pp_title <- renderText(sprintf("%s: quality control", input$pp))
+  output$pp_stale <- renderUI({
+    req(input$pp); i <- D()$info
+    if (is.null(i) || input$pp %in% i$participants) return(NULL)
+    why <- run_failures(i)[input$pp]
+    p(status_badge("warning", sprintf(
+      "Not analysed in the last run%s. This page shows the outputs of an earlier run; the group pages do not include this participant.",
+      if (is.na(why)) "" else paste0(" (", why, ")"))))
+  })
   output$pp_qc <- renderText(paste(P()$qc, collapse = "\n"))
 
   output$pp_timeline <- renderPlotly({
@@ -386,19 +430,22 @@ server <- function(input, output, session) {
     plots <- lapply(dofs, function(v) {
       lim <- if (grepl("_mm$", v)) cmm else cdg
       s <- st %>% mutate(y = pmax(pmin(.data[[v]], lim), -lim))
-      q <- pl %>% mutate(y = pmax(pmin(.data[[v]], lim), -lim),
-                         txt = sprintf("%s<br>%s  MSO %g  ISI %g ms<br>MEP %.3f mV<br>%s = %.2f", format(mac_time, "%H:%M:%S"),
-                                       pulse_class, mso, isi_ms, ptp_mv, v, .data[[v]]))
-      fig <- plot_ly()
+      fig <- plot_ly(colors = OS_CLASS_COL)       # here, not on add_markers(): plotly drops a palette given after other traces
       if (!is.null(bl)) for (k in seq_len(nrow(bl)))
         fig <- fig %>% add_segments(x = bl$start[k], xend = bl$end[k], y = lim * 0.95, yend = lim * 0.95,
                                     line = list(color = "#c8c6bf", width = 6), hoverinfo = "text",
                                     text = paste(bl$coil[k], "in use"), showlegend = FALSE)
       fig <- fig %>%
         add_lines(data = s, x = ~t, y = ~y, split = ~coil, line = list(color = "#52514e", width = 1),
-                  hoverinfo = "skip", showlegend = FALSE) %>%
-        add_markers(data = q, x = ~mac_time, y = ~y, color = ~pulse_class, colors = OS_CLASS_COL,
-                    text = ~txt, hoverinfo = "text", marker = list(size = 6), showlegend = (v == dofs[1]), legendgroup = ~pulse_class)
+                  hoverinfo = "skip", showlegend = FALSE)
+      if (!is.null(pl)) {                         # no <id>_pulses.csv: the trace alone is still drawn
+        q <- pl %>% mutate(y = pmax(pmin(.data[[v]], lim), -lim),
+                           txt = sprintf("%s<br>%s  MSO %g  ISI %g ms<br>MEP %.3f mV<br>%s = %.2f", format(mac_time, "%H:%M:%S"),
+                                         pulse_class, mso, isi_ms, ptp_mv, v, .data[[v]]))
+        fig <- fig %>%
+          add_markers(data = q, x = ~mac_time, y = ~y, color = ~pulse_class,
+                      text = ~txt, hoverinfo = "text", marker = list(size = 6), showlegend = (v == dofs[1]), legendgroup = ~pulse_class)
+      }
       if (!is.null(ev) && nrow(ev)) fig <- fig %>% add_segments(data = ev %>% filter(!is.na(target_name)), x = ~t, xend = ~t, y = -lim, yend = lim,
                     line = list(color = OS_COL$orange, width = 1, dash = "dot"), hoverinfo = "text",
                     text = ~paste("target selected:", target_name), showlegend = FALSE)
@@ -409,8 +456,8 @@ server <- function(input, output, session) {
       layout(hovermode = "closest", legend = list(orientation = "h", y = 1.02), margin = list(l = 70))
   })
 
-  output$pp_dof <- renderPlotly({
-    q <- pp_pulses(); req(nrow(q) > 0)
+  output$pp_dof_plot <- renderPlotly({
+    q <- pp_pulses(); req(q, nrow(q) > 0)
     vars <- paste0("abs_", OS_DOF$var)
     dl <- q %>% select(participant, pulse_class, mso, isi_ms, ptp_mv, mac_time, all_of(vars)) %>%
       pivot_longer(all_of(vars), names_to = "dof", values_to = "value") %>%
@@ -425,15 +472,15 @@ server <- function(input, output, session) {
   })
 
   output$pp_stats <- renderDT({
-    s <- D()$stats; req(s, input$pp)
-    s <- s %>% filter(participant == input$pp, outcome == input$pp_outcome, form == input$pp_form, level == input$pp_level) %>%
+    s <- P()$stats; req(s)
+    s <- s %>% filter(outcome == input$pp_outcome, form == input$pp_form, level == input$pp_level) %>%
       mutate(sig = sig_mark(p), p = fmt_p(p)) %>%
       select(pulse_class, isi_ms, predictor = pred_label, n, n_strata, estimate, ci_lo, ci_hi, p, sig, pct_change_per_unit, rho_within, note)
     tbl_or_msg(disp(s), "No model for this selection (too few pulses).")
   })
   output$pp_place <- renderDT({
-    p <- D()$place; req(p, input$pp)
-    tbl_or_msg(disp(p %>% filter(participant == input$pp) %>% select(-participant)))
+    p <- P()$place; req(p)
+    tbl_or_msg(disp(p %>% select(-any_of("participant"))))
   })
   output$pp_targets <- renderDT({ t <- P()$targets; tbl_or_msg(disp(t), "no target table") })
 
@@ -628,6 +675,38 @@ server <- function(input, output, session) {
     showNotification(sprintf("Removed %d row(s) from the manifest.", length(i)), type = "message")
   })
 
+  # The manifest stores full paths, so data moved on the share leave its rows
+  # pointing at folders that are gone (those participants then fail the run and
+  # drop out of the group). os_relocate_missing() finds the same files in the
+  # folders of step 1; shown live here, applied by the button and by Run.
+  reloc <- reactive({
+    invalidateLater(30000)          # a file copied in while the page is open stops being "not found"
+    os_relocate_missing(man(), dirs_d())
+  })
+  output$man_paths <- renderUI({
+    r <- reloc(); m <- man()
+    gone <- r$missing[r$missing$participant %in% m$participant[included(m)], , drop = FALSE]
+    tagList(
+      if (nrow(r$moved)) p(status_badge("warning", sprintf(
+        "%d path(s) no longer exist, but the same files are in the folders of step 1 (%s). Repair moved paths, or Run, points the manifest at them.",
+        nrow(r$moved), paste(unique(r$moved$participant), collapse = ", ")))),
+      if (nrow(gone)) p(status_badge("critical", sprintf(
+        "Not at the manifest path and not in the folders of step 1, so these will fail: %s",
+        paste(sprintf("%s %s (%s)", gone$participant, gone$column, basename(gone$old)), collapse = "; ")))))
+  })
+  # Returns how many paths were repointed.
+  repair_paths <- function() {
+    r <- os_relocate_missing(man(), dirs())        # fresh, not the debounced preview
+    if (nrow(r$moved)) {
+      man(r$manifest); write_man(r$manifest)
+      showNotification(paste("Manifest paths updated to the current data folders for:",
+                             paste(unique(r$moved$participant), collapse = ", ")), type = "message", duration = 12)
+    }
+    invisible(nrow(r$moved))
+  }
+  observeEvent(input$repair_paths,
+    if (repair_paths() == 0L) showNotification("No manifest path needs repairing.", type = "message"))
+
   # Add the ready participants from step 2 to the manifest (paths refreshed for
   # one already listed). The ones that could not be completed stay in the box.
   commit_staged <- function() {
@@ -709,6 +788,7 @@ server <- function(input, output, session) {
   run_proc <- reactiveVal(NULL); run_logfile <- reactiveVal(NULL)
   observeEvent(input$run_pipeline, {
     req(is.null(run_proc()) || !run_proc()$is_alive())
+    repair_paths()
     if (isTRUE(input$auto_add)) auto_add_ready()
     commit_staged()
     m <- man()
